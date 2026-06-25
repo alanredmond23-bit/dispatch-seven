@@ -110,11 +110,14 @@ Return ONLY valid JSON array, no markdown, no explanation:
 Max 8 blocks. Reference actual issue titles. Be specific, not generic.`;
 
   try {
-    // Call /api/schedule — Vercel serverless function adds Anthropic key server-side
-    const res = await fetch("/api/schedule", {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1000,
+        messages: [{ role: "user", content: prompt }],
+      }),
     });
     const d = await res.json();
     const text = d.content?.[0]?.text || "[]";
