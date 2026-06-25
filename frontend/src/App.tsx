@@ -110,9 +110,15 @@ Return ONLY valid JSON array, no markdown, no explanation:
 Max 8 blocks. Reference actual issue titles. Be specific, not generic.`;
 
   try {
+    // VITE_ANTHROPIC_API_KEY baked in by GitHub Actions (repo secret)
+    // Falls back to the Claude.ai artifact proxy (no key needed) when running inside Claude
+    const apiKey = (typeof import.meta?.env?.VITE_ANTHROPIC_API_KEY) || "";
+    const authHeaders = apiKey
+      ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
+      : {};
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
         max_tokens: 1000,
