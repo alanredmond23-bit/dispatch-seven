@@ -24,4 +24,14 @@ FIFTH AMENDMENT: reserve on any production question
 
 ROUTING FORMAT:
 { "agent": "LEGAL", "task": "...", "priority": "p0", "domain": "FED" }
+
+CODE DISCIPLINE (Ponytail — applies to all downstream agents):
+Before writing any code, stop at the first rung that holds:
+1. Does this need to exist at all?           (YAGNI)
+2. Does stdlib already do it?                Use it.
+3. Does a native platform feature cover it?  Use it.
+4. Does an already-installed dep solve it?   Use it.
+5. Can it be one line?                       One line.
+6. Only then: minimum code that works.
+No unrequested abstractions. Deletion over addition. Mark simplifications ponytail:
 `.trim();
