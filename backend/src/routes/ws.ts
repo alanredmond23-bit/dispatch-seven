@@ -20,6 +20,7 @@ import { traceRun } from "../lib/langfuse.js";
 import { supabase } from "../lib/supabase.js";
 import { extractCitations, verifyCitation } from "../lib/citation-extractor.js";
 import { LEGAL_SYSTEM } from "../../../agents/legal.js";
+import { parseAndInsertActions } from "../middleware/actions-parser.js";
 
 const ANTHROPIC_URL    = "https://api.anthropic.com/v1/messages";
 const PING_INTERVAL_MS = 30_000;
@@ -199,7 +200,7 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
           ? evt.data
           : Buffer.from(evt.data as ArrayBuffer).toString();
 
-        let msg: { type: string; content?: string; session_id?: string };
+        let msg: { type: string; content?: string; session_id?: string; agent?: string };
         try {
           msg = JSON.parse(raw);
         } catch {
@@ -222,7 +223,9 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
 
         // ── LEGAL ROUTING — detect legal queries, pick agent label ──────────
         const legal = isLegalQuery(userMessage);
-        const agentLabel = legal ? "LEGAL" : "SCHEDULER";
+        // FIX B: use agent field from WS message; default to "ORCHESTRATOR"
+        const agentFromMsg = msg.agent;
+        const agentLabel = agentFromMsg ?? (legal ? "LEGAL" : "ORCHESTRATOR");
         console.log(`[WS] message session=${sid} len=${userMessage.length} agent=${agentLabel}`);
 
         // --- Mem0: fetch relevant context from prior sessions ---
@@ -281,6 +284,13 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
             // Stream citation block as additional tokens so the client receives it inline
             outputBuf += citationBlock;
             ws.send(JSON.stringify({ type: "token", content: citationBlock }));
+          }
+
+          // FIX A: wire actions parser — extract and persist embedded action blocks
+          try {
+            await parseAndInsertActions(fullResponse, sid);
+          } catch (actErr) {
+            console.error("[actions-parser] non-fatal:", actErr);
           }
 
           ws.send(JSON.stringify({ type: "done", session_id: sid }));
