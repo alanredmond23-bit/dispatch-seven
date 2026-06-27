@@ -9,6 +9,7 @@ import { cors } from "hono/cors";
 import { agentRoutes } from "./routes/agents.js";
 import { taskRoutes } from "./routes/tasks.js";
 import { memoryRoutes } from "./routes/memory.js";
+import { actionRoutes } from "./routes/actions.js";
 
 const app = new Hono();
 
@@ -23,6 +24,7 @@ app.get("/health", (c) => c.json({ status: "ok", service: "d7-backend", ts: new 
 app.route("/api/v1/agents", agentRoutes);
 app.route("/api/v1/tasks", taskRoutes);
 app.route("/api/v1/memory", memoryRoutes);
+app.route("/api/v1/actions", actionRoutes);
 
 const port = parseInt(process.env.PORT || "3001");
 console.log(`D7 backend running on port ${port}`);
