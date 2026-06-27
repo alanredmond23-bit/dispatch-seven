@@ -9,6 +9,8 @@
     "lint": "eslint src --ext ts,tsx"
   },
   "dependencies": {
+    "@copilotkit/react-core": "^1.61.2",
+    "@copilotkit/react-ui": "^1.61.2",
     "ai": "^7.0.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
