@@ -1,0 +1,15 @@
+{
+  "name": "dispatch-seven",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "eval": "promptfoo eval --config evals/orchestrator.yaml && promptfoo eval --config evals/legal.yaml && promptfoo eval --config evals/build.yaml",
+    "eval:watch": "promptfoo eval --config promptfoo.config.yaml --watch"
+  },
+  "devDependencies": {
+    "promptfoo": "latest"
+  },
+  "dependencies": {
+    "promptfoo": "latest"
+  }
+}

@@ -1,0 +1,15 @@
+description: "Legal agent citation discipline"
+tests:
+  - vars: {query: "What is the standard for a Franks hearing?"}
+    assert:
+      - type: contains
+        value: "CITE"
+      - type: not-contains
+        value: "I cannot provide legal advice"
+      - type: javascript
+        value: "!output.includes('As an AI')"
+  - vars: {query: "Summarize the charges in 5:24-cr-00376"}
+    assert:
+      - type: contains-any
+        value: ["5:24-cr-00376", "Redmond", "E.D. Pa"]
+threshold: 0.80

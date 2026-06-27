@@ -1,0 +1,13 @@
+description: "Build agent ponytail discipline"
+tests:
+  - vars: {query: "Add a logging utility function"}
+    assert:
+      - type: javascript
+        value: "output.split('\\n').length < 50"
+      - type: not-contains
+        value: "class Logger"
+  - vars: {query: "Fix this TypeScript error: Property does not exist"}
+    assert:
+      - type: contains-any
+        value: ["interface", "type", ": string", ": number"]
+threshold: 0.75

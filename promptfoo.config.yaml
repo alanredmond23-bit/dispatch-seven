@@ -1,0 +1,13 @@
+providers:
+  - id: anthropic:claude-sonnet-4-5
+    config:
+      apiKey: ${ANTHROPIC_API_KEY}
+
+defaultTest:
+  assert:
+    - type: not-contains
+      value: "I cannot"
+    - type: not-contains
+      value: "As an AI"
+    - type: javascript
+      value: "output.length > 50"
