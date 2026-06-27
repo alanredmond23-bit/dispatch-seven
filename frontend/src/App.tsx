@@ -1,4 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import DarkModeToggle from "./components/DarkModeToggle";
+import SetupWizard from "./components/SetupWizard";
+import TypingIndicator from "./components/TypingIndicator";
+import { useAgentStream } from "./hooks/useAgentStream";
 import { generateScheduleViaWs } from "./lib/wsSchedule";
 
 // ── CONFIG ───────────────────────────────────────────────────────────────────
@@ -191,6 +195,7 @@ function TodayTab({ issues, sessionId }: { issues: any[]; sessionId?: string }) 
   const [schedule, setSchedule] = useState(null);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState(null);
+  const { isTyping, run: streamRun } = useAgentStream();
 
   const run = useCallback(async () => {
     setLoading(true);
@@ -267,6 +272,8 @@ function TodayTab({ issues, sessionId }: { issues: any[]; sessionId?: string }) 
           </div>
         </div>
       ))}
+
+      <TypingIndicator visible={isTyping || loading} />
 
       {!loading && schedule?.length === 0 && (
         <div style={{ ...css.card, fontFamily:T.mono, fontSize:"11px", color:T.muted }}>
@@ -580,6 +587,7 @@ function Header({ issueCount, trialDays, onRefresh, loading, sessionId }) {
         )}
       </div>
       <div style={{ display:"flex", alignItems:"center", gap:"12px" }}>
+        <DarkModeToggle />
         <CostBadge sessionId={sessionId} />
         <span style={{ fontFamily:T.mono, fontSize:"11px", color: trialDays <= 30 ? "#dc2626" : T.muted, letterSpacing:"0.1em" }}>
           {trialDays}d
@@ -671,6 +679,7 @@ export default function App() {
 
   return (
     <div style={{ background:T.bg, minHeight:"100vh", maxWidth:"430px", margin:"0 auto", position:"relative", fontFamily:T.sans, color:T.text }}>
+      <SetupWizard />
       <Header issueCount={issues.length} trialDays={trialDays} onRefresh={() => fetchIssues()} loading={loading} sessionId={sessionId} />
 
       {tab === "today"     && <TodayTab     issues={issues} sessionId={sessionId} />}
