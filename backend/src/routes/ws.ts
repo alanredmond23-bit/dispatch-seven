@@ -16,13 +16,53 @@
 import type { UpgradeWebSocket } from "hono/ws";
 import { trackRun } from "../lib/cost-tracker.js";
 import { getRelevantContext, addMemory } from "../lib/mem0.js";
+import { traceRun } from "../lib/langfuse.js";
+import { supabase } from "../lib/supabase.js";
 
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_URL    = "https://api.anthropic.com/v1/messages";
 const PING_INTERVAL_MS = 30_000;
 const PONG_TIMEOUT_MS  = 5_000;
 
+// ── BUDGET CAP ───────────────────────────────────────────────────────────────
+// Per-session hard cap. Set BUDGET_CAP_USD in env; default $1.00.
+// Ponytail: session-level cap — per-user caps when multi-tenant
+const BUDGET_CAP_USD = parseFloat(process.env.BUDGET_CAP_USD ?? "1.00");
+
+/**
+ * checkBudget — returns the current session spend.
+ * Throws if BUDGET_CAP_USD is exceeded.
+ */
+async function checkBudget(sessionId: string): Promise<void> {
+  const { data, error } = await supabase
+    .from("agent_runs")
+    .select("cost_usd")
+    .eq("session_id", sessionId);
+
+  if (error) {
+    // Supabase unavailable — fail open (do not block the request)
+    console.warn(`[budget] query failed for session=${sessionId}: ${error.message}`);
+    return;
+  }
+
+  const totalSpend = (data ?? []).reduce(
+    (sum: number, row: { cost_usd: number | null }) => sum + (row.cost_usd ?? 0),
+    0
+  );
+
+  if (totalSpend >= BUDGET_CAP_USD) {
+    throw new BudgetCapError(totalSpend);
+  }
+}
+
+class BudgetCapError extends Error {
+  constructor(public readonly spend: number) {
+    super(`Budget cap reached ($${spend.toFixed(4)}). Reset session to continue.`);
+  }
+}
+
+// ── CLAUDE STREAMING ─────────────────────────────────────────────────────────
 // Stream Claude tokens, calling onToken per chunk.
-// Returns { input_tokens, output_tokens } captured from SSE message_start / message_delta events.
+// Returns { input_tokens, output_tokens, fullResponse } captured from SSE events.
 // systemPrompt: prepended context (memory injection, etc.)
 async function streamClaude(
   content: string,
@@ -44,8 +84,8 @@ async function streamClaude(
   const res = await fetch(ANTHROPIC_URL, {
     method: "POST",
     headers: {
-      "Content-Type":    "application/json",
-      "x-api-key":       apiKey,
+      "Content-Type":      "application/json",
+      "x-api-key":         apiKey,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(body),
@@ -56,8 +96,7 @@ async function streamClaude(
     throw new Error(`Anthropic API ${res.status}: ${err}`);
   }
 
-  // Parse SSE stream from Anthropic
-  const reader = res.body!.getReader();
+  const reader  = res.body!.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   let fullResponse = "";
@@ -68,7 +107,7 @@ async function streamClaude(
     buf += decoder.decode(value, { stream: true });
 
     const lines = buf.split("\n");
-    buf = lines.pop() ?? "";           // keep incomplete last line
+    buf = lines.pop() ?? "";
 
     for (const line of lines) {
       if (!line.startsWith("data: ")) continue;
@@ -77,10 +116,8 @@ async function streamClaude(
       try {
         const evt = JSON.parse(data);
         if (evt.type === "message_start" && evt.message?.usage) {
-          // input_tokens arrive in message_start
           usage.input_tokens = evt.message.usage.input_tokens ?? 0;
         } else if (evt.type === "message_delta" && evt.usage) {
-          // output_tokens arrive in message_delta
           usage.output_tokens = evt.usage.output_tokens ?? 0;
         } else if (
           evt.type === "content_block_delta" &&
@@ -97,7 +134,7 @@ async function streamClaude(
   return { ...usage, fullResponse };
 }
 
-// Factory: call with the upgradeWebSocket helper from @hono/node-ws
+// ── WS HANDLER ───────────────────────────────────────────────────────────────
 export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
   return upgradeWebSocket((c) => {
     const sessionId = c.req.query("session_id") ?? "unknown";
@@ -108,7 +145,6 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
       onOpen(_evt, ws) {
         console.log(`[WS] open session=${sessionId}`);
 
-        // Heartbeat: ping every 30s, expect pong within 5s
         pingTimer = setInterval(() => {
           try {
             ws.send(JSON.stringify({ type: "ping" }));
@@ -135,7 +171,6 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
           return;
         }
 
-        // Pong clears the pong timeout
         if (msg.type === "pong") {
           if (pongTimer) { clearTimeout(pongTimer); pongTimer = null; }
           return;
@@ -162,26 +197,74 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
           // Mem0 down — proceed without context
         }
 
-        // Cost tracking: start row before Claude call, finish after with usage
+        // ── BUDGET CHECK (before any Anthropic call) ────────────────────────
+        try {
+          await checkBudget(sid);
+        } catch (err: unknown) {
+          if (err instanceof BudgetCapError) {
+            ws.send(JSON.stringify({ type: "error", message: err.message }));
+            ws.close(1008, "budget cap reached");
+            return;
+          }
+          // Any other budget-check error: fail open, log, continue
+          console.error("[budget] unexpected error:", err);
+        }
+
+        // ── LANGFUSE TRACE SETUP ────────────────────────────────────────────
+        const traceId   = `${sid}-${Date.now()}`;
+        const spanStart = new Date().toISOString();
+        let   outputBuf = ""; // accumulate output for Langfuse
+
+        // Cost tracking: start row before Claude call
         const tracker = trackRun({ session_id: sid, agent: "SCHEDULER", model: "claude-sonnet-4-6" });
-        const runId = await tracker.start().catch(() => null); // non-fatal if Supabase is unavailable
+        const runId   = await tracker.start().catch(() => null);
 
         try {
           const { fullResponse, ...usage } = await streamClaude(
             userMessage,
-            (token) => { ws.send(JSON.stringify({ type: "token", content: token })); },
+            (token) => {
+              outputBuf += token;
+              ws.send(JSON.stringify({ type: "token", content: token }));
+            },
             systemPrompt
           );
 
           ws.send(JSON.stringify({ type: "done", session_id: sid }));
 
-          // Record usage — fire-and-forget so WS response isn't delayed
+          const spanEnd = new Date().toISOString();
+
+          // Cost tracking — fire-and-forget so WS response isn't delayed
           if (runId) tracker.finish(runId, usage).catch(console.error);
+
+          // ── LANGFUSE: trace + span + cost score ─────────────────────────
+          // Wrapped in try/catch — Langfuse down must not affect WS handler
+          const { calculateCost } = await import("../lib/cost-tracker.js");
+          const costUsd = calculateCost(
+            "claude-sonnet-4-6",
+            usage.input_tokens,
+            usage.output_tokens
+          );
+
+          traceRun({
+            traceId,
+            agentName: "SCHEDULER",
+            input:     userMessage,
+            output:    outputBuf,
+            costUsd,
+            metadata: {
+              session_id:   sid,
+              model:        "claude-sonnet-4-6",
+              inputTokens:  usage.input_tokens,
+              outputTokens: usage.output_tokens,
+              spanStart,
+              spanEnd,
+            },
+          }).catch(console.error); // truly fire-and-forget
 
           // --- Mem0: store conversation turn after response ---
           addMemory(sid, [
-            { role: "user",      content: userMessage   },
-            { role: "assistant", content: fullResponse  },
+            { role: "user",      content: userMessage  },
+            { role: "assistant", content: fullResponse },
           ]).catch(() => {/* Mem0 down — silent */});
 
         } catch (err: unknown) {
