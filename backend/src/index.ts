@@ -10,6 +10,7 @@ import { agentRoutes } from "./routes/agents.js";
 import { taskRoutes } from "./routes/tasks.js";
 import { memoryRoutes } from "./routes/memory.js";
 import { actionRoutes } from "./routes/actions.js";
+import { decomposeRoutes } from "./routes/decompose.js";
 
 const app = new Hono();
 
@@ -25,6 +26,7 @@ app.route("/api/v1/agents", agentRoutes);
 app.route("/api/v1/tasks", taskRoutes);
 app.route("/api/v1/memory", memoryRoutes);
 app.route("/api/v1/actions", actionRoutes);
+app.route("/api/decompose", decomposeRoutes); // goal → DAG → dispatch7 tables
 
 const port = parseInt(process.env.PORT || "3001");
 console.log(`D7 backend running on port ${port}`);
