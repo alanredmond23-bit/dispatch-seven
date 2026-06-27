@@ -1,42 +1,42 @@
-// Shared memory routes — cross-agent state store
-// GET  /api/v1/memory/:key   — retrieve value
-// POST /api/v1/memory        — set key/value
-// DELETE /api/v1/memory/:key — clear key
+// Memory routes — cross-session Mem0-backed store
+// GET    /api/v1/memory?session_id=X  — search memories for session
+// DELETE /api/v1/memory?session_id=X  — clear all memories for session
+//
+// Legacy key-value routes (pre-S2) removed; Mem0 is the memory layer now.
 
 import { Hono } from "hono";
-import { supabase } from "../lib/supabase.js";
+import { searchMemory } from "../lib/mem0.js";
+import MemoryClient from "mem0ai";
 
 export const memoryRoutes = new Hono();
 
-memoryRoutes.get("/:key", async (c) => {
-  const { data, error } = await supabase
-    .from("memory")
-    .select("*")
-    .eq("key", c.req.param("key"))
-    .single();
-  if (error) return c.json({ error: "Key not found" }, 404);
-  return c.json(data);
+function getClient(): MemoryClient | null {
+  const key = process.env.MEM0_API_KEY;
+  if (!key) return null;
+  return new MemoryClient({ api_key: key });
+}
+
+memoryRoutes.get("/", async (c) => {
+  const sessionId = c.req.query("session_id");
+  if (!sessionId) return c.json({ error: "session_id required" }, 400);
+
+  const query = c.req.query("q") ?? "";
+  const memories = await searchMemory(sessionId, query || sessionId);
+  return c.json({ memories });
 });
 
-memoryRoutes.post("/", async (c) => {
-  const { key, value, agent, ttl_seconds } = await c.req.json();
-  const expires_at = ttl_seconds
-    ? new Date(Date.now() + ttl_seconds * 1000).toISOString()
-    : null;
-  const { data, error } = await supabase
-    .from("memory")
-    .upsert({ key, value, agent, expires_at, updated_at: new Date().toISOString() })
-    .select()
-    .single();
-  if (error) return c.json({ error: error.message }, 500);
-  return c.json(data, 201);
-});
+memoryRoutes.delete("/", async (c) => {
+  const sessionId = c.req.query("session_id");
+  if (!sessionId) return c.json({ error: "session_id required" }, 400);
 
-memoryRoutes.delete("/:key", async (c) => {
-  const { error } = await supabase
-    .from("memory")
-    .delete()
-    .eq("key", c.req.param("key"));
-  if (error) return c.json({ error: error.message }, 500);
-  return c.json({ deleted: c.req.param("key") });
+  try {
+    const client = getClient();
+    if (!client) return c.json({ error: "MEM0_API_KEY not configured" }, 503);
+    // Mem0 delete_all scoped to user_id
+    await (client as any).delete_all({ user_id: sessionId });
+    return c.json({ cleared: sessionId });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return c.json({ error: message }, 500);
+  }
 });
