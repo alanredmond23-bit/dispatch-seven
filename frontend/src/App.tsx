@@ -84,7 +84,7 @@ const gh = {
 };
 
 // ── CLAUDE SCHEDULE ──────────────────────────────────────────────────────────
-async function generateSchedule(issues) {
+async function generateSchedule(issues, sessionId?: string) {
   const p0 = issues.filter(i => getPriority(i.labels) === "p0").slice(0, 6);
   const p1 = issues.filter(i => getPriority(i.labels) === "p1").slice(0, 5);
   const trialDays = daysUntil("2026-09-14");
@@ -187,7 +187,7 @@ function TokenScreen({ onSave }) {
 }
 
 // ── TODAY TAB ─────────────────────────────────────────────────────────────────
-function TodayTab({ issues }) {
+function TodayTab({ issues, sessionId }: { issues: any[]; sessionId?: string }) {
   const [schedule, setSchedule] = useState(null);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState(null);
@@ -196,7 +196,7 @@ function TodayTab({ issues }) {
     setLoading(true);
     setError(null);
     try {
-      const blocks = await generateSchedule(issues);
+      const blocks = await generateSchedule(issues, sessionId);
       setSchedule(blocks);
     } catch(e) {
       setError("Schedule failed. Check network.");
@@ -567,7 +567,7 @@ function DeadlinesTab() {
 }
 
 // ── HEADER ────────────────────────────────────────────────────────────────────
-function Header({ issueCount, trialDays, onRefresh, loading }) {
+function Header({ issueCount, trialDays, onRefresh, loading, sessionId }) {
   return (
     <div style={{ background:T.bg, borderBottom:`1px solid ${T.border}`, padding:"12px 16px", display:"flex", justifyContent:"space-between", alignItems:"center", position:"sticky", top:0, zIndex:10 }}>
       <div style={{ display:"flex", alignItems:"center", gap:"10px" }}>
@@ -580,6 +580,7 @@ function Header({ issueCount, trialDays, onRefresh, loading }) {
         )}
       </div>
       <div style={{ display:"flex", alignItems:"center", gap:"12px" }}>
+        <CostBadge sessionId={sessionId} />
         <span style={{ fontFamily:T.mono, fontSize:"11px", color: trialDays <= 30 ? "#dc2626" : T.muted, letterSpacing:"0.1em" }}>
           {trialDays}d
         </span>
@@ -634,6 +635,8 @@ export default function App() {
   const [tab,     setTab]     = useState("today");
   const [issues,  setIssues]  = useState([]);
   const [loading, setLoading] = useState(false);
+  // Stable session ID for cost tracking — new value per page load, no persistence needed
+  const sessionId = useRef(typeof crypto !== "undefined" ? crypto.randomUUID() : Math.random().toString(36).slice(2)).current;
 
   const fetchIssues = useCallback(async (tok = token) => {
     if (!tok) return;
@@ -668,9 +671,9 @@ export default function App() {
 
   return (
     <div style={{ background:T.bg, minHeight:"100vh", maxWidth:"430px", margin:"0 auto", position:"relative", fontFamily:T.sans, color:T.text }}>
-      <Header issueCount={issues.length} trialDays={trialDays} onRefresh={() => fetchIssues()} loading={loading} />
+      <Header issueCount={issues.length} trialDays={trialDays} onRefresh={() => fetchIssues()} loading={loading} sessionId={sessionId} />
 
-      {tab === "today"     && <TodayTab     issues={issues} />}
+      {tab === "today"     && <TodayTab     issues={issues} sessionId={sessionId} />}
       {tab === "board"     && <BoardTab     issues={issues} onDone={markDone} loading={loading} />}
       {tab === "capture"   && <CaptureTab   token={token}   onCreated={fetchIssues} />}
       {tab === "deadlines" && <DeadlinesTab />}

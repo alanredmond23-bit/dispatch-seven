@@ -14,16 +14,19 @@
 //   { type: "ping" }                              — heartbeat (30s)
 
 import type { UpgradeWebSocket } from "hono/ws";
+import { trackRun } from "../lib/cost-tracker.js";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const PING_INTERVAL_MS = 30_000;
 const PONG_TIMEOUT_MS  = 5_000;
 
-// Stream Claude tokens, calling onToken per chunk, returns full text
+// Stream Claude tokens, calling onToken per chunk.
+// Returns { input_tokens, output_tokens } captured from SSE message_start / message_delta events.
 async function streamClaude(
   content: string,
   onToken: (tok: string) => void
-): Promise<void> {
+): Promise<{ input_tokens: number; output_tokens: number }> {
+  const usage = { input_tokens: 0, output_tokens: 0 };
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
 
@@ -66,7 +69,13 @@ async function streamClaude(
       if (data === "[DONE]") return;
       try {
         const evt = JSON.parse(data);
-        if (
+        if (evt.type === "message_start" && evt.message?.usage) {
+          // input_tokens arrive in message_start
+          usage.input_tokens = evt.message.usage.input_tokens ?? 0;
+        } else if (evt.type === "message_delta" && evt.usage) {
+          // output_tokens arrive in message_delta
+          usage.output_tokens = evt.usage.output_tokens ?? 0;
+        } else if (
           evt.type === "content_block_delta" &&
           evt.delta?.type === "text_delta"
         ) {
@@ -77,6 +86,7 @@ async function streamClaude(
       }
     }
   }
+  return usage;
 }
 
 // Factory: call with the upgradeWebSocket helper from @hono/node-ws
@@ -131,11 +141,17 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
         const sid = msg.session_id ?? sessionId;
         console.log(`[WS] message session=${sid} len=${msg.content.length}`);
 
+        // Cost tracking: start row before Claude call, finish after with usage
+        const tracker = trackRun({ session_id: sid, agent: "SCHEDULER", model: "claude-sonnet-4-6" });
+        const runId = await tracker.start().catch(() => null); // non-fatal if Supabase is unavailable
+
         try {
-          await streamClaude(msg.content, (token) => {
+          const usage = await streamClaude(msg.content, (token) => {
             ws.send(JSON.stringify({ type: "token", content: token }));
           });
           ws.send(JSON.stringify({ type: "done", session_id: sid }));
+          // Record usage — fire-and-forget so WS response isn't delayed
+          if (runId) tracker.finish(runId, usage).catch(console.error);
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           console.error(`[WS] stream error session=${sid}:`, message);

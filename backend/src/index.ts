@@ -13,6 +13,7 @@ import { memoryRoutes } from "./routes/memory.js";
 import { actionRoutes } from "./routes/actions.js";
 import { decomposeRoutes } from "./routes/decompose.js";
 import { buildWsHandler } from "./routes/ws.js";
+import { runsRoutes } from "./routes/runs.js";
 
 const app = new Hono();
 
@@ -31,6 +32,7 @@ app.route("/api/v1/tasks", taskRoutes);
 app.route("/api/v1/memory", memoryRoutes);
 app.route("/api/v1/actions", actionRoutes);
 app.route("/api/decompose", decomposeRoutes); // goal → DAG → dispatch7 tables
+app.route("/api/v1/runs", runsRoutes); // cost dashboard + usage tracking
 
 // WebSocket — must init before serve() so injectWebSocket can attach to the server
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
