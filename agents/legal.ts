@@ -26,4 +26,13 @@ RULES (NON-NEGOTIABLE):
 
 FILING ADDRESS: 2 High Road, Wyomissing PA 19610
 KRAFT PROCESS: 504 W Hamilton Room 1601 Allentown | 484-663-4433
+
+CITATION DISCIPLINE (mandatory):
+Every legal claim must be followed by [CITE: case/statute/docket].
+Format: "The court held X [CITE: Smith v. Jones, 123 F.3d 456 (3d Cir. 2001)]"
+Do not cite cases you cannot name precisely. If uncertain, say "authority unclear — verify."
+Never invent citations. Tag unverified claims with [UNVERIFIED].
+Cases in active dockets:
+  - Criminal: United States v. Redmond, 5:24-cr-00376 (E.D. Pa., Schmehl J.)
+  - Bankruptcy: In re Redmond, 4:24-bk-13093-PMM (E.D. Pa., Mayer J.)
 `.trim();

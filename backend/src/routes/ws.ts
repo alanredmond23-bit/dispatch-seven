@@ -18,6 +18,8 @@ import { trackRun } from "../lib/cost-tracker.js";
 import { getRelevantContext, addMemory } from "../lib/mem0.js";
 import { traceRun } from "../lib/langfuse.js";
 import { supabase } from "../lib/supabase.js";
+import { extractCitations, verifyCitation } from "../lib/citation-extractor.js";
+import { LEGAL_SYSTEM } from "../../../agents/legal.js";
 
 const ANTHROPIC_URL    = "https://api.anthropic.com/v1/messages";
 const PING_INTERVAL_MS = 30_000;
@@ -60,10 +62,42 @@ class BudgetCapError extends Error {
   }
 }
 
+// ── LEGAL ROUTING ────────────────────────────────────────────────────────────
+// Legal keyword detector — routes message through LEGAL_SYSTEM prompt + citation pipeline
+const LEGAL_KEYWORDS = /\b(legal|case|docket|court|filing|motion|statute|plaintiff|defendant|counsel|attorney|bail|indictment|bankruptcy|discharge|adversary|foreclosure|hearing|trial|subpoena|deposition|discovery|brief|complaint|answer|judgment|appeal|circuit|district|redmond|schmehl|mayer|EDPA|5:24-cr|4:24-bk|AP 25)\b/i;
+
+function isLegalQuery(content: string): boolean {
+  return LEGAL_KEYWORDS.test(content);
+}
+
+// Build citation appendix from extracted + verified citations
+async function buildCitationBlock(fullText: string): Promise<string> {
+  const citations = extractCitations(fullText);
+  if (!citations.length) {
+    return "\n\n---\n**CITATIONS**\n⚠️ No citations extracted — legal claims should be verified manually.";
+  }
+
+  // Verify all citations in parallel with 3s timeout each
+  const verified = await Promise.all(
+    citations.map(async (c) => {
+      const result = await verifyCitation(c.citation);
+      return { ...c, ...result };
+    })
+  );
+
+  const lines = verified.map((c) => {
+    const status = c.verified ? "✓" : "[UNVERIFIED]";
+    const link = c.url ? ` — ${c.url}` : "";
+    return `- ${c.citation} ${status}${link}`;
+  });
+
+  return "\n\n---\n**CITATIONS**\n" + lines.join("\n");
+}
+
 // ── CLAUDE STREAMING ─────────────────────────────────────────────────────────
 // Stream Claude tokens, calling onToken per chunk.
 // Returns { input_tokens, output_tokens, fullResponse } captured from SSE events.
-// systemPrompt: prepended context (memory injection, etc.)
+// systemPrompt: prepended context (mem0 injection, legal system prompt, etc.)
 async function streamClaude(
   content: string,
   onToken: (tok: string) => void,
@@ -74,12 +108,14 @@ async function streamClaude(
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
 
   const body: Record<string, unknown> = {
-    model:       "claude-sonnet-4-6",
-    max_tokens:  1200,
-    stream:      true,
+    model:      "claude-sonnet-4-6",
+    max_tokens: 1200,
+    stream:     true,
     messages: [{ role: "user", content }],
   };
-  if (systemPrompt) body.system = systemPrompt;
+  if (systemPrompt) {
+    body.system = systemPrompt;
+  }
 
   const res = await fetch(ANTHROPIC_URL, {
     method: "POST",
@@ -183,18 +219,28 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
 
         const sid = msg.session_id ?? sessionId;
         const userMessage = msg.content;
-        console.log(`[WS] message session=${sid} len=${userMessage.length}`);
+
+        // ── LEGAL ROUTING — detect legal queries, pick agent label ──────────
+        const legal = isLegalQuery(userMessage);
+        const agentLabel = legal ? "LEGAL" : "SCHEDULER";
+        console.log(`[WS] message session=${sid} len=${userMessage.length} agent=${agentLabel}`);
 
         // --- Mem0: fetch relevant context from prior sessions ---
         let systemPrompt: string | undefined;
         try {
           const memCtx = await getRelevantContext(sid, userMessage);
           if (memCtx) {
-            systemPrompt =
-              `You have access to these memories from prior sessions:\n${memCtx}\n\n---\n`;
+            systemPrompt = `You have access to these memories from prior sessions:\n${memCtx}\n\n---\n`;
           }
         } catch {
           // Mem0 down — proceed without context
+        }
+
+        // Legal queries get the LEGAL_SYSTEM prompt, merged with any mem0 context
+        if (legal) {
+          systemPrompt = systemPrompt
+            ? `${LEGAL_SYSTEM}\n\n---\n${systemPrompt}`
+            : LEGAL_SYSTEM;
         }
 
         // ── BUDGET CHECK (before any Anthropic call) ────────────────────────
@@ -216,7 +262,7 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
         let   outputBuf = ""; // accumulate output for Langfuse
 
         // Cost tracking: start row before Claude call
-        const tracker = trackRun({ session_id: sid, agent: "SCHEDULER", model: "claude-sonnet-4-6" });
+        const tracker = trackRun({ session_id: sid, agent: agentLabel, model: "claude-sonnet-4-6" });
         const runId   = await tracker.start().catch(() => null);
 
         try {
@@ -228,6 +274,14 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
             },
             systemPrompt
           );
+
+          // Legal responses: extract and verify citations, then stream the citation block
+          if (legal && fullResponse) {
+            const citationBlock = await buildCitationBlock(fullResponse);
+            // Stream citation block as additional tokens so the client receives it inline
+            outputBuf += citationBlock;
+            ws.send(JSON.stringify({ type: "token", content: citationBlock }));
+          }
 
           ws.send(JSON.stringify({ type: "done", session_id: sid }));
 
@@ -247,7 +301,7 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
 
           traceRun({
             traceId,
-            agentName: "SCHEDULER",
+            agentName: agentLabel,
             input:     userMessage,
             output:    outputBuf,
             costUsd,
@@ -258,6 +312,7 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
               outputTokens: usage.output_tokens,
               spanStart,
               spanEnd,
+              isLegal:      legal,
             },
           }).catch(console.error); // truly fire-and-forget
 
