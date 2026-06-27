@@ -1,0 +1,21 @@
+description: "Orchestrator routing accuracy"
+prompts:
+  - file://agents/orchestrator.ts
+tests:
+  - vars: {query: "What are my upcoming court deadlines?"}
+    assert:
+      - type: contains-any
+        value: ["LEGAL", "DEADLINE", "deadline"]
+  - vars: {query: "Review this code for security issues"}
+    assert:
+      - type: contains-any
+        value: ["BUILD", "QA", "code"]
+  - vars: {query: "What did we spend on Claude last month?"}
+    assert:
+      - type: contains-any
+        value: ["FINANCE", "MONITOR", "cost"]
+  - vars: {query: "Schedule a follow-up for next week"}
+    assert:
+      - type: contains-any
+        value: ["SCHEDULER", "schedule"]
+threshold: 0.75
