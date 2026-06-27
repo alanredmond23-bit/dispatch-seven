@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { generateScheduleViaWs } from "./lib/wsSchedule";
+import CitationBlock, { parseMessageCitations } from "./components/CitationBlock";
 
 // ── CONFIG ───────────────────────────────────────────────────────────────────
 const OWNER = "alanredmond23-bit";
@@ -260,7 +261,9 @@ function TodayTab({ issues, sessionId }: { issues: any[]; sessionId?: string }) 
           </div>
           <div style={{ flex:1, minWidth:0 }}>
             <div style={{ fontSize:"13px", color:T.text, lineHeight:1.4, marginBottom:"3px" }}>{b.task}</div>
-            {b.note && <div style={{ fontFamily:T.mono, fontSize:"10px", color:T.muted, lineHeight:1.4 }}>{b.note}</div>}
+            {b.note && <div style={{ fontFamily:T.mono, fontSize:"10px", color:T.muted, lineHeight:1.4 }}>{parseMessageCitations(b.note).body || b.note}</div>}
+            {b.note && parseMessageCitations(b.note).noneExtracted && <CitationBlock messageText={b.note} />}
+            {b.note && parseMessageCitations(b.note).citations.length > 0 && <CitationBlock messageText={b.note} />}
           </div>
           <div style={{ fontFamily:T.mono, fontSize:"9px", color:TYPE_C[b.type] || T.muted, letterSpacing:"0.12em", paddingTop:"2px", flexShrink:0 }}>
             {(b.type||"").toUpperCase()}
