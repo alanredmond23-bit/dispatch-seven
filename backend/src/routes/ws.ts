@@ -19,8 +19,9 @@ import { getRelevantContext, addMemory } from "../lib/mem0.js";
 import { traceRun } from "../lib/langfuse.js";
 import { supabase } from "../lib/supabase.js";
 import { extractCitations, verifyCitation } from "../lib/citation-extractor.js";
-import { LEGAL_SYSTEM } from "../../../agents/legal.js";
 import { parseAndInsertActions } from "../middleware/actions-parser.js";
+import { classifyMessage } from "../lib/classifier.js";
+import { loadAgent } from "../lib/agent-loader.js";
 
 const ANTHROPIC_URL    = "https://api.anthropic.com/v1/messages";
 const PING_INTERVAL_MS = 30_000;
@@ -63,13 +64,6 @@ class BudgetCapError extends Error {
   }
 }
 
-// ── LEGAL ROUTING ────────────────────────────────────────────────────────────
-// Legal keyword detector — routes message through LEGAL_SYSTEM prompt + citation pipeline
-const LEGAL_KEYWORDS = /\b(legal|case|docket|court|filing|motion|statute|plaintiff|defendant|counsel|attorney|bail|indictment|bankruptcy|discharge|adversary|foreclosure|hearing|trial|subpoena|deposition|discovery|brief|complaint|answer|judgment|appeal|circuit|district|redmond|schmehl|mayer|EDPA|5:24-cr|4:24-bk|AP 25)\b/i;
-
-function isLegalQuery(content: string): boolean {
-  return LEGAL_KEYWORDS.test(content);
-}
 
 // Build citation appendix from extracted + verified citations
 async function buildCitationBlock(fullText: string): Promise<string> {
@@ -102,15 +96,17 @@ async function buildCitationBlock(fullText: string): Promise<string> {
 async function streamClaude(
   content: string,
   onToken: (tok: string) => void,
-  systemPrompt?: string
+  systemPrompt?: string,
+  model = "claude-sonnet-4-6",
+  maxTokens = 4096
 ): Promise<{ input_tokens: number; output_tokens: number; fullResponse: string }> {
   const usage = { input_tokens: 0, output_tokens: 0 };
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
 
   const body: Record<string, unknown> = {
-    model:      "claude-sonnet-4-6",
-    max_tokens: 1200,
+    model,
+    max_tokens: maxTokens,
     stream:     true,
     messages: [{ role: "user", content }],
   };
@@ -221,29 +217,25 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
         const sid = msg.session_id ?? sessionId;
         const userMessage = msg.content;
 
-        // ── LEGAL ROUTING — detect legal queries, pick agent label ──────────
-        const legal = isLegalQuery(userMessage);
-        // FIX B: use agent field from WS message; default to "ORCHESTRATOR"
+        // ── AGENT ROUTING — classify message, load agent config ─────────────
         const agentFromMsg = msg.agent;
-        const agentLabel = agentFromMsg ?? (legal ? "LEGAL" : "ORCHESTRATOR");
+        const domain = classifyMessage(userMessage);
+        const agentConfig = loadAgent(domain);
+        const agentLabel = agentFromMsg ?? domain;
         console.log(`[WS] message session=${sid} len=${userMessage.length} agent=${agentLabel}`);
 
+        // ── ROUTE INDICATOR — tell frontend which agent is handling this ──────
+        ws.send(JSON.stringify({ type: "route", agent: domain, model: agentConfig.model }));
+
         // --- Mem0: fetch relevant context from prior sessions ---
-        let systemPrompt: string | undefined;
+        let systemPrompt: string | undefined = agentConfig.systemPrompt;
         try {
           const memCtx = await getRelevantContext(sid, userMessage);
           if (memCtx) {
-            systemPrompt = `You have access to these memories from prior sessions:\n${memCtx}\n\n---\n`;
+            systemPrompt = `${agentConfig.systemPrompt}\n\n---\nMemories from prior sessions:\n${memCtx}`;
           }
         } catch {
           // Mem0 down — proceed without context
-        }
-
-        // Legal queries get the LEGAL_SYSTEM prompt, merged with any mem0 context
-        if (legal) {
-          systemPrompt = systemPrompt
-            ? `${LEGAL_SYSTEM}\n\n---\n${systemPrompt}`
-            : LEGAL_SYSTEM;
         }
 
         // ── BUDGET CHECK (before any Anthropic call) ────────────────────────
@@ -265,7 +257,7 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
         let   outputBuf = ""; // accumulate output for Langfuse
 
         // Cost tracking: start row before Claude call
-        const tracker = trackRun({ session_id: sid, agent: agentLabel, model: "claude-sonnet-4-6" });
+        const tracker = trackRun({ session_id: sid, agent: agentLabel, model: agentConfig.model });
         const runId   = await tracker.start().catch(() => null);
 
         try {
@@ -275,11 +267,13 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
               outputBuf += token;
               ws.send(JSON.stringify({ type: "token", content: token }));
             },
-            systemPrompt
+            systemPrompt,
+            agentConfig.model,
+            agentConfig.maxTokens
           );
 
           // Legal responses: extract and verify citations, then stream the citation block
-          if (legal && fullResponse) {
+          if (domain === "LEGAL" && fullResponse) {
             const citationBlock = await buildCitationBlock(fullResponse);
             // Stream citation block as additional tokens so the client receives it inline
             outputBuf += citationBlock;
@@ -304,7 +298,7 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
           // Wrapped in try/catch — Langfuse down must not affect WS handler
           const { calculateCost } = await import("../lib/cost-tracker.js");
           const costUsd = calculateCost(
-            "claude-sonnet-4-6",
+            agentConfig.model,
             usage.input_tokens,
             usage.output_tokens
           );
@@ -317,7 +311,7 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
             costUsd,
             metadata: {
               session_id:   sid,
-              model:        "claude-sonnet-4-6",
+              model:        agentConfig.model,
               inputTokens:  usage.input_tokens,
               outputTokens: usage.output_tokens,
               spanStart,

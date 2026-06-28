@@ -14,6 +14,11 @@ export interface AgentMessage {
   status:  MessageStatus;
 }
 
+export interface RouteInfo {
+  agent: string;
+  model: string;
+}
+
 export interface UseAgentStreamReturn {
   /** Send a prompt to the agent */
   send:        (content: string) => void;
@@ -25,6 +30,8 @@ export interface UseAgentStreamReturn {
   wsStatus:    "connecting" | "open" | "closed" | "error";
   /** Clear message history */
   clearMessages: () => void;
+  /** Active route: which agent + model is handling current stream */
+  routeInfo:   RouteInfo | null;
 }
 
 export function useAgentStream(sessionId: string): UseAgentStreamReturn {
@@ -32,6 +39,7 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
 
   const [messages,  setMessages]  = useState<AgentMessage[]>([]);
   const [isTyping,  setIsTyping]  = useState(false);
+  const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
 
   // Token buffer for rAF batching — avoids one setState per token
   const tokenBufRef    = useRef<string>("");
@@ -57,7 +65,9 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
   // Process raw WS messages as they arrive
   useEffect(() => {
     for (const raw of rawMessages) {
-      if (raw.type === "token" && raw.content !== undefined) {
+      if (raw.type === "route" && raw.agent) {
+        setRouteInfo({ agent: raw.agent, model: raw.model ?? "" });
+      } else if (raw.type === "token" && raw.content !== undefined) {
         if (!activeIdRef.current) {
           // First token of a new response — create message row
           const newId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -88,6 +98,7 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
         );
         activeIdRef.current = null;
         setIsTyping(false);
+        setRouteInfo(null);
       } else if (raw.type === "error") {
         if (rafRef.current !== null) {
           cancelAnimationFrame(rafRef.current);
@@ -102,6 +113,7 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
         );
         activeIdRef.current = null;
         setIsTyping(false);
+        setRouteInfo(null);
       }
     }
     // rawMessages grows monotonically — only process newest entries
@@ -129,7 +141,8 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
       rafRef.current = null;
     }
     setIsTyping(false);
+    setRouteInfo(null);
   }, []);
 
-  return { send, messages, isTyping, wsStatus, clearMessages };
+  return { send, messages, isTyping, wsStatus, clearMessages, routeInfo };
 }
