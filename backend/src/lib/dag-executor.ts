@@ -97,7 +97,7 @@ async function updateNodeStatus(
 async function callAgent(
   node: TaskNode
 ): Promise<Record<string, unknown>> {
-  const config = loadAgent(node.type);
+  const config = await loadAgent(node.type);
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 

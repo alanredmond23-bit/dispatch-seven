@@ -85,7 +85,8 @@ async function transcribeWav(
   }
 
   // Node 18+ has FormData + Blob globally — no extra deps required
-  const blob = new Blob([audioBuffer], { type: "audio/wav" });
+  // Cast Buffer to Uint8Array to satisfy Blob constructor (SharedArrayBuffer vs ArrayBuffer TS constraint)
+  const blob = new Blob([new Uint8Array(audioBuffer)], { type: "audio/wav" });
   const form = new FormData();
   form.append("file", blob, filename);
   form.append("model", "whisper-1");

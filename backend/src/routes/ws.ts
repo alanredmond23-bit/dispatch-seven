@@ -223,7 +223,7 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
         // ── AGENT ROUTING — classify message, load agent config ─────────────
         const agentFromMsg = msg.agent;
         const domain = classifyMessage(userMessage);
-        const agentConfig = loadAgent(domain);
+        const agentConfig = await loadAgent(domain);
         const agentLabel = agentFromMsg ?? domain;
         console.log(`[WS] message session=${sid} len=${userMessage.length} agent=${agentLabel}`);
 
