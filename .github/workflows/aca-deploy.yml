@@ -3,21 +3,25 @@ on:
   push:
     branches: [main]
     paths: ['backend/**', '.github/workflows/aca-deploy.yml']
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
+
       - name: Build and push to ACR
         run: |
           az acr build \
             --registry ${{ secrets.ACR_NAME }} \
             --image dispatch-seven-api:${{ github.sha }} \
             ./backend
+
       - name: Configure ACR pull auth on ACA
         run: |
           az acr update --name ${{ secrets.ACR_NAME }} --admin-enabled true
@@ -28,10 +32,26 @@ jobs:
             --server ${{ secrets.ACR_NAME }}.azurecr.io \
             --username ${{ secrets.ACR_NAME }} \
             --password "$ACR_PASSWORD"
-      - name: Deploy to ACA
+
+      - name: Deploy to ACA with env vars
         run: |
           az containerapp update \
             --name dispatch-seven-api \
             --resource-group menagerie-rg \
             --image ${{ secrets.ACR_NAME }}.azurecr.io/dispatch-seven-api:${{ github.sha }} \
-            --set-env-vars PORT=3000
+            --set-env-vars \
+              "PORT=3000" \
+              "NODE_ENV=production" \
+              "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" \
+              "BUDGET_CAP_USD=5.00" \
+              "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" \
+              "SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+              "VOYAGE_API_KEY=${{ secrets.VOYAGE_API_KEY }}" \
+              "LANGFUSE_PUBLIC_KEY=${{ secrets.LANGFUSE_PUBLIC_KEY }}" \
+              "LANGFUSE_SECRET_KEY=${{ secrets.LANGFUSE_SECRET_KEY }}" \
+              "MEM0_API_KEY=${{ secrets.MEM0_API_KEY }}" \
+              "INNGEST_EVENT_KEY=${{ secrets.INNGEST_EVENT_KEY }}" \
+              "INNGEST_SIGNING_KEY=${{ secrets.INNGEST_SIGNING_KEY }}" \
+              "COURTLISTENER_API_KEY=${{ secrets.COURTLISTENER_API_KEY }}" \
+              "SERP_API_KEY=${{ secrets.SERP_API_KEY }}" \
+              "TAVILY_API_KEY=${{ secrets.TAVILY_API_KEY }}"
