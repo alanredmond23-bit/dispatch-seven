@@ -255,6 +255,13 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
           // Mem0 down — proceed without context
         }
 
+        // Legal queries get the LEGAL_SYSTEM prompt, merged with any mem0 context
+        if (legal) {
+          systemPrompt = systemPrompt
+            ? `${LEGAL_SYSTEM}\n\n---\n${systemPrompt}`
+            : LEGAL_SYSTEM;
+        }
+
         // ── BUDGET CHECK (before any Anthropic call) ────────────────────────
         try {
           await checkBudget(sid);
