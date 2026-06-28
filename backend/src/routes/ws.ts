@@ -16,14 +16,89 @@
 import type { UpgradeWebSocket } from "hono/ws";
 import { trackRun } from "../lib/cost-tracker.js";
 import { getRelevantContext, addMemory } from "../lib/mem0.js";
+import { traceRun } from "../lib/langfuse.js";
+import { supabase } from "../lib/supabase.js";
+import { extractCitations, verifyCitation } from "../lib/citation-extractor.js";
+import { LEGAL_SYSTEM } from "../../../agents/legal.js";
+import { parseAndInsertActions } from "../middleware/actions-parser.js";
 
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_URL    = "https://api.anthropic.com/v1/messages";
 const PING_INTERVAL_MS = 30_000;
 const PONG_TIMEOUT_MS  = 5_000;
 
+// ── BUDGET CAP ───────────────────────────────────────────────────────────────
+// Per-session hard cap. Set BUDGET_CAP_USD in env; default $1.00.
+// Ponytail: session-level cap — per-user caps when multi-tenant
+const BUDGET_CAP_USD = parseFloat(process.env.BUDGET_CAP_USD ?? "1.00");
+
+/**
+ * checkBudget — returns the current session spend.
+ * Throws if BUDGET_CAP_USD is exceeded.
+ */
+async function checkBudget(sessionId: string): Promise<void> {
+  const { data, error } = await supabase
+    .from("agent_runs")
+    .select("cost_usd")
+    .eq("session_id", sessionId);
+
+  if (error) {
+    // Supabase unavailable — fail open (do not block the request)
+    console.warn(`[budget] query failed for session=${sessionId}: ${error.message}`);
+    return;
+  }
+
+  const totalSpend = (data ?? []).reduce(
+    (sum: number, row: { cost_usd: number | null }) => sum + (row.cost_usd ?? 0),
+    0
+  );
+
+  if (totalSpend >= BUDGET_CAP_USD) {
+    throw new BudgetCapError(totalSpend);
+  }
+}
+
+class BudgetCapError extends Error {
+  constructor(public readonly spend: number) {
+    super(`Budget cap reached ($${spend.toFixed(4)}). Reset session to continue.`);
+  }
+}
+
+// ── LEGAL ROUTING ────────────────────────────────────────────────────────────
+// Legal keyword detector — routes message through LEGAL_SYSTEM prompt + citation pipeline
+const LEGAL_KEYWORDS = /\b(legal|case|docket|court|filing|motion|statute|plaintiff|defendant|counsel|attorney|bail|indictment|bankruptcy|discharge|adversary|foreclosure|hearing|trial|subpoena|deposition|discovery|brief|complaint|answer|judgment|appeal|circuit|district|redmond|schmehl|mayer|EDPA|5:24-cr|4:24-bk|AP 25)\b/i;
+
+function isLegalQuery(content: string): boolean {
+  return LEGAL_KEYWORDS.test(content);
+}
+
+// Build citation appendix from extracted + verified citations
+async function buildCitationBlock(fullText: string): Promise<string> {
+  const citations = extractCitations(fullText);
+  if (!citations.length) {
+    return "\n\n---\n**CITATIONS**\n⚠️ No citations extracted — legal claims should be verified manually.";
+  }
+
+  // Verify all citations in parallel with 3s timeout each
+  const verified = await Promise.all(
+    citations.map(async (c) => {
+      const result = await verifyCitation(c.citation);
+      return { ...c, ...result };
+    })
+  );
+
+  const lines = verified.map((c) => {
+    const status = c.verified ? "✓" : "[UNVERIFIED]";
+    const link = c.url ? ` — ${c.url}` : "";
+    return `- ${c.citation} ${status}${link}`;
+  });
+
+  return "\n\n---\n**CITATIONS**\n" + lines.join("\n");
+}
+
+// ── CLAUDE STREAMING ─────────────────────────────────────────────────────────
 // Stream Claude tokens, calling onToken per chunk.
-// Returns { input_tokens, output_tokens } captured from SSE message_start / message_delta events.
-// systemPrompt: prepended context (memory injection, etc.)
+// Returns { input_tokens, output_tokens, fullResponse } captured from SSE events.
+// systemPrompt: prepended context (mem0 injection, legal system prompt, etc.)
 async function streamClaude(
   content: string,
   onToken: (tok: string) => void,
@@ -34,18 +109,20 @@ async function streamClaude(
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
 
   const body: Record<string, unknown> = {
-    model:       "claude-sonnet-4-6",
-    max_tokens:  1200,
-    stream:      true,
+    model:      "claude-sonnet-4-6",
+    max_tokens: 1200,
+    stream:     true,
     messages: [{ role: "user", content }],
   };
-  if (systemPrompt) body.system = systemPrompt;
+  if (systemPrompt) {
+    body.system = systemPrompt;
+  }
 
   const res = await fetch(ANTHROPIC_URL, {
     method: "POST",
     headers: {
-      "Content-Type":    "application/json",
-      "x-api-key":       apiKey,
+      "Content-Type":      "application/json",
+      "x-api-key":         apiKey,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(body),
@@ -56,8 +133,7 @@ async function streamClaude(
     throw new Error(`Anthropic API ${res.status}: ${err}`);
   }
 
-  // Parse SSE stream from Anthropic
-  const reader = res.body!.getReader();
+  const reader  = res.body!.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   let fullResponse = "";
@@ -68,7 +144,7 @@ async function streamClaude(
     buf += decoder.decode(value, { stream: true });
 
     const lines = buf.split("\n");
-    buf = lines.pop() ?? "";           // keep incomplete last line
+    buf = lines.pop() ?? "";
 
     for (const line of lines) {
       if (!line.startsWith("data: ")) continue;
@@ -77,10 +153,8 @@ async function streamClaude(
       try {
         const evt = JSON.parse(data);
         if (evt.type === "message_start" && evt.message?.usage) {
-          // input_tokens arrive in message_start
           usage.input_tokens = evt.message.usage.input_tokens ?? 0;
         } else if (evt.type === "message_delta" && evt.usage) {
-          // output_tokens arrive in message_delta
           usage.output_tokens = evt.usage.output_tokens ?? 0;
         } else if (
           evt.type === "content_block_delta" &&
@@ -97,7 +171,7 @@ async function streamClaude(
   return { ...usage, fullResponse };
 }
 
-// Factory: call with the upgradeWebSocket helper from @hono/node-ws
+// ── WS HANDLER ───────────────────────────────────────────────────────────────
 export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
   return upgradeWebSocket((c) => {
     const sessionId = c.req.query("session_id") ?? "unknown";
@@ -108,7 +182,6 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
       onOpen(_evt, ws) {
         console.log(`[WS] open session=${sessionId}`);
 
-        // Heartbeat: ping every 30s, expect pong within 5s
         pingTimer = setInterval(() => {
           try {
             ws.send(JSON.stringify({ type: "ping" }));
@@ -127,7 +200,7 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
           ? evt.data
           : Buffer.from(evt.data as ArrayBuffer).toString();
 
-        let msg: { type: string; content?: string; session_id?: string };
+        let msg: { type: string; content?: string; session_id?: string; agent?: string };
         try {
           msg = JSON.parse(raw);
         } catch {
@@ -135,7 +208,6 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
           return;
         }
 
-        // Pong clears the pong timeout
         if (msg.type === "pong") {
           if (pongTimer) { clearTimeout(pongTimer); pongTimer = null; }
           return;
@@ -148,40 +220,116 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
 
         const sid = msg.session_id ?? sessionId;
         const userMessage = msg.content;
-        console.log(`[WS] message session=${sid} len=${userMessage.length}`);
+
+        // ── LEGAL ROUTING — detect legal queries, pick agent label ──────────
+        const legal = isLegalQuery(userMessage);
+        // FIX B: use agent field from WS message; default to "ORCHESTRATOR"
+        const agentFromMsg = msg.agent;
+        const agentLabel = agentFromMsg ?? (legal ? "LEGAL" : "ORCHESTRATOR");
+        console.log(`[WS] message session=${sid} len=${userMessage.length} agent=${agentLabel}`);
 
         // --- Mem0: fetch relevant context from prior sessions ---
         let systemPrompt: string | undefined;
         try {
           const memCtx = await getRelevantContext(sid, userMessage);
           if (memCtx) {
-            systemPrompt =
-              `You have access to these memories from prior sessions:\n${memCtx}\n\n---\n`;
+            systemPrompt = `You have access to these memories from prior sessions:\n${memCtx}\n\n---\n`;
           }
         } catch {
           // Mem0 down — proceed without context
         }
 
-        // Cost tracking: start row before Claude call, finish after with usage
-        const tracker = trackRun({ session_id: sid, agent: "SCHEDULER", model: "claude-sonnet-4-6" });
-        const runId = await tracker.start().catch(() => null); // non-fatal if Supabase is unavailable
+        // Legal queries get the LEGAL_SYSTEM prompt, merged with any mem0 context
+        if (legal) {
+          systemPrompt = systemPrompt
+            ? `${LEGAL_SYSTEM}\n\n---\n${systemPrompt}`
+            : LEGAL_SYSTEM;
+        }
+
+        // ── BUDGET CHECK (before any Anthropic call) ────────────────────────
+        try {
+          await checkBudget(sid);
+        } catch (err: unknown) {
+          if (err instanceof BudgetCapError) {
+            ws.send(JSON.stringify({ type: "error", message: err.message }));
+            ws.close(1008, "budget cap reached");
+            return;
+          }
+          // Any other budget-check error: fail open, log, continue
+          console.error("[budget] unexpected error:", err);
+        }
+
+        // ── LANGFUSE TRACE SETUP ────────────────────────────────────────────
+        const traceId   = `${sid}-${Date.now()}`;
+        const spanStart = new Date().toISOString();
+        let   outputBuf = ""; // accumulate output for Langfuse
+
+        // Cost tracking: start row before Claude call
+        const tracker = trackRun({ session_id: sid, agent: agentLabel, model: "claude-sonnet-4-6" });
+        const runId   = await tracker.start().catch(() => null);
 
         try {
           const { fullResponse, ...usage } = await streamClaude(
             userMessage,
-            (token) => { ws.send(JSON.stringify({ type: "token", content: token })); },
+            (token) => {
+              outputBuf += token;
+              ws.send(JSON.stringify({ type: "token", content: token }));
+            },
             systemPrompt
           );
 
+          // Legal responses: extract and verify citations, then stream the citation block
+          if (legal && fullResponse) {
+            const citationBlock = await buildCitationBlock(fullResponse);
+            // Stream citation block as additional tokens so the client receives it inline
+            outputBuf += citationBlock;
+            ws.send(JSON.stringify({ type: "token", content: citationBlock }));
+          }
+
+          // FIX A: wire actions parser — extract and persist embedded action blocks
+          try {
+            await parseAndInsertActions(fullResponse, sid);
+          } catch (actErr) {
+            console.error("[actions-parser] non-fatal:", actErr);
+          }
+
           ws.send(JSON.stringify({ type: "done", session_id: sid }));
 
-          // Record usage — fire-and-forget so WS response isn't delayed
+          const spanEnd = new Date().toISOString();
+
+          // Cost tracking — fire-and-forget so WS response isn't delayed
           if (runId) tracker.finish(runId, usage).catch(console.error);
+
+          // ── LANGFUSE: trace + span + cost score ─────────────────────────
+          // Wrapped in try/catch — Langfuse down must not affect WS handler
+          const { calculateCost } = await import("../lib/cost-tracker.js");
+          const costUsd = calculateCost(
+            "claude-sonnet-4-6",
+            usage.input_tokens,
+            usage.output_tokens
+          );
+
+          traceRun({
+            traceId,
+            agentName: agentLabel,
+            input:     userMessage,
+            output:    outputBuf,
+            costUsd,
+            metadata: {
+              session_id:   sid,
+              model:        "claude-sonnet-4-6",
+              inputTokens:  usage.input_tokens,
+              outputTokens: usage.output_tokens,
+              spanStart,
+              spanEnd,
+              isLegal:      legal,
+            },
+          }).catch(console.error); // truly fire-and-forget
 
           // --- Mem0: store conversation turn after response ---
           addMemory(sid, [
-            { role: "user",      content: userMessage   },
-            { role: "assistant", content: fullResponse  },
+            { role: "user",      content: userMessage  },
+            { role: "assistant", content: fullResponse },
           ]).catch(() => {/* Mem0 down — silent */});
 
         } catch (err: unknown) {
