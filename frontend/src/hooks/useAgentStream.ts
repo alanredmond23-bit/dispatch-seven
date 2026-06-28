@@ -1,3 +1,30 @@
+// useAgentStream.ts — thin hook wrapping wsSchedule; exposes isTyping for UI
+// Ponytail: no state machine, just isTyping bool + results
+import { useState, useCallback } from "react";
+import { generateScheduleViaWs } from "../lib/wsSchedule";
+
+interface UseAgentStreamResult {
+  isTyping: boolean;
+  run: (prompt: string, sessionId?: string) => Promise<string | null>;
+}
+
+export function useAgentStream(): UseAgentStreamResult {
+  const [isTyping, setIsTyping] = useState(false);
+
+  const run = useCallback(async (prompt: string, sessionId?: string): Promise<string | null> => {
+    setIsTyping(true);
+    try {
+      const result = await generateScheduleViaWs(prompt, sessionId);
+      return result;
+    } catch (err) {
+      console.error("[useAgentStream]", err);
+      return null;
+    } finally {
+      setIsTyping(false);
+    }
+  }, []);
+
+  return { isTyping, run };
 // useAgentStream — wraps useWebSocket with smooth token buffering + typing indicator.
 // Uses rAF (16ms) to batch token appends and avoid layout thrash.
 // Message status: 'streaming' | 'complete' | 'error'
@@ -9,11 +36,10 @@
 //
 // Ponytail: rAF buffer + poll fallback. Upgrade to realtime subscription in P1.
 
+// Ponytail: basic WS + rAF buffer. Add readDataStreamResponse when SSE transport is wired.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useWebSocket } from "./useWebSocket";
-
 export type MessageStatus = "idle" | "streaming" | "complete" | "error";
-
 export interface AgentMessage {
   id:      string;
   content: string;
@@ -64,6 +90,12 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
   const pollTimerRef      = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── FLUSH BUFFERED TOKENS ─────────────────────────────────────────────────
+  const [messages,  setMessages]  = useState<AgentMessage[]>([]);
+  const [isTyping,  setIsTyping]  = useState(false);
+  const tokenBufRef    = useRef<string>("");
+  const rafRef         = useRef<number | null>(null);
+  const activeIdRef    = useRef<string | null>(null);
+  // Flush buffered tokens into the active message via a single setState
   const flushTokens = useCallback(() => {
     rafRef.current = null;
     const chunk = tokenBufRef.current;
@@ -79,6 +111,7 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
   }, []);
 
   // ── PROCESS WS MESSAGES ───────────────────────────────────────────────────
+  // Process raw WS messages as they arrive
   useEffect(() => {
     for (const raw of rawMessages) {
       // Record WS activity so polling knows WS is alive
@@ -94,6 +127,7 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
             { id: newId, content: "", status: "streaming" },
           ]);
         }
+        // Buffer the token; schedule a single rAF flush
         tokenBufRef.current += raw.content;
         if (rafRef.current === null) {
           rafRef.current = requestAnimationFrame(flushTokens);
@@ -191,6 +225,8 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
   }, []);
 
+    // rawMessages grows monotonically — only process newest entries
+  // Cleanup pending rAF on unmount
   const send = useCallback(
     (content: string) => {
       // Sending resets the WS silence clock
@@ -199,7 +235,6 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
     },
     [wsSend, sessionId]
   );
-
   const clearMessages = useCallback(() => {
     setMessages([]);
     activeIdRef.current      = null;
@@ -208,10 +243,10 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
-    }
     setIsTyping(false);
     setIsPolling(false);
   }, []);
 
   return { send, messages, isTyping, wsStatus, clearMessages, isPolling };
+  return { send, messages, isTyping, wsStatus, clearMessages };
 }
