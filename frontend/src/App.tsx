@@ -9,6 +9,9 @@ import TypingIndicator from "./components/TypingIndicator";
 import { useAgentStream } from "./hooks/useAgentStream";
 import { generateScheduleViaWs } from "./lib/wsSchedule";
 import CitationBlock, { parseMessageCitations } from "./components/CitationBlock";
+import { DesignSystem } from "./pages/DesignSystem";
+import "./index.css";
+
 import ActionsPanel from "./components/ActionsPanel";
 import ConnectionBadge from "./components/ConnectionBadge";
 import { useAgentStream } from "./hooks/useAgentStream";
@@ -662,6 +665,12 @@ function BottomNav({ tab, setTab, p0Count }) {
 
 // ── ROOT APP ─────────────────────────────────────────────────────────────────
 export default function App() {
+
+  // DEV-only: route /design to design system preview
+  if (import.meta.env.DEV && typeof window !== "undefined" && window.location.pathname === "/design") {
+    return <DesignSystem />;
+  }
+
   const [token,   setToken]   = useState("");
   const [tab,     setTab]     = useState("today");
   const [issues,  setIssues]  = useState([]);

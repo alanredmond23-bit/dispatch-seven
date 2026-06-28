@@ -40,6 +40,9 @@ export default function TypingIndicator({ visible }: Props) {
       </div>
     </>
 // TypingIndicator — three animated dots shown while agent is streaming.
+// Uses D7 design system: accent color dots, CSS vars for timing.
+// Zero DOM cost when hidden (returns null — no layout box).
+
 // Zero DOM cost when hidden: display:none (not visibility:hidden — no layout box).
 // No library. Pure CSS keyframe via <style> tag injected once.
 // Ponytail: one component, one job.
