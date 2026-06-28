@@ -3,8 +3,13 @@
 // Ponytail: readFileSync at startup is fine — these files are tiny and local
 
 import { readFileSync } from 'fs';
-import { join } from 'path';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import type { AgentDomain } from './classifier.js';
+
+// ESM-safe __dirname shim — project uses "type": "module" so __dirname is undefined at runtime
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 export interface AgentConfig {
   name: AgentDomain;
