@@ -19,7 +19,8 @@
     "hono": "^4.6.0",
     "inngest": "^4.11.0",
     "langfuse": "^3.38.20",
-    "mem0ai": "^3.0.12"
+    "mem0ai": "^3.0.12",
+    "@azure/storage-blob": "^12.26.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
