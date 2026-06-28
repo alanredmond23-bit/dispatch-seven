@@ -24,7 +24,7 @@ import { parseAndInsertActions } from "../middleware/actions-parser.js";
 
 const ANTHROPIC_URL    = "https://api.anthropic.com/v1/messages";
 const PING_INTERVAL_MS = 30_000;
-const PONG_TIMEOUT_MS  = 5_000;
+const PONG_TIMEOUT_MS  = 10_000;
 
 // ── BUDGET CAP ───────────────────────────────────────────────────────────────
 // Per-session hard cap. Set BUDGET_CAP_USD in env; default $1.00.
@@ -306,6 +306,30 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
             await parseAndInsertActions(fullResponse, sid);
           } catch (actErr) {
             console.error("[actions-parser] non-fatal:", actErr);
+          }
+
+          // Detect orchestrator routing JSON { "agent": "...", "task": "...", "priority": "..." }
+          // and emit a spawn_task action so agent routing is visible in the ActionsPanel.
+          // Ponytail: single regex, fire-and-forget — never blocks WS response.
+          try {
+            const routeMatch = fullResponse.match(
+              /\{[^{}]*"agent"\s*:\s*"([A-Z]+)"[^{}]*"task"\s*:\s*"([^"]+)"[^{}]*\}/
+            );
+            if (routeMatch) {
+              const backendBase = `http://localhost:${process.env.PORT ?? "3001"}`;
+              fetch(`${backendBase}/api/v1/actions`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  session_id: sid,
+                  agent: "ORCHESTRATOR",
+                  type:  "spawn_task",
+                  payload: { target_agent: routeMatch[1], task_title: routeMatch[2] },
+                }),
+              }).catch(() => {/* non-fatal */});
+            }
+          } catch {
+            // non-fatal — routing detection must not crash WS handler
           }
 
           ws.send(JSON.stringify({ type: "done", session_id: sid }));

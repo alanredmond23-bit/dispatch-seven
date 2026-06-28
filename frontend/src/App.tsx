@@ -5,6 +5,9 @@ import TypingIndicator from "./components/TypingIndicator";
 import { useAgentStream } from "./hooks/useAgentStream";
 import { generateScheduleViaWs } from "./lib/wsSchedule";
 import CitationBlock, { parseMessageCitations } from "./components/CitationBlock";
+import ActionsPanel from "./components/ActionsPanel";
+import ConnectionBadge from "./components/ConnectionBadge";
+import { useAgentStream } from "./hooks/useAgentStream";
 
 // ── CONFIG ───────────────────────────────────────────────────────────────────
 const OWNER = "alanredmond23-bit";
@@ -577,7 +580,7 @@ function DeadlinesTab() {
 }
 
 // ── HEADER ────────────────────────────────────────────────────────────────────
-function Header({ issueCount, trialDays, onRefresh, loading, sessionId }) {
+function Header({ issueCount, trialDays, onRefresh, loading, sessionId, wsStatus = "open", reconnectAttempts = 0 }) {
   return (
     <div style={{ background:T.bg, borderBottom:`1px solid ${T.border}`, padding:"12px 16px", display:"flex", justifyContent:"space-between", alignItems:"center", position:"sticky", top:0, zIndex:10 }}>
       <div style={{ display:"flex", alignItems:"center", gap:"10px" }}>
@@ -592,6 +595,7 @@ function Header({ issueCount, trialDays, onRefresh, loading, sessionId }) {
       <div style={{ display:"flex", alignItems:"center", gap:"12px" }}>
         <DarkModeToggle />
         <CostBadge sessionId={sessionId} />
+        <ConnectionBadge status={wsStatus} attempts={reconnectAttempts} />
         <span style={{ fontFamily:T.mono, fontSize:"11px", color: trialDays <= 30 ? "#dc2626" : T.muted, letterSpacing:"0.1em" }}>
           {trialDays}d
         </span>
@@ -648,6 +652,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   // Stable session ID for cost tracking — new value per page load, no persistence needed
   const sessionId = useRef(typeof crypto !== "undefined" ? crypto.randomUUID() : Math.random().toString(36).slice(2)).current;
+  // WS stream — exposes connection status for ConnectionBadge
+  const { wsStatus, reconnectAttempts } = useAgentStream(sessionId);
 
   const fetchIssues = useCallback(async (tok = token) => {
     if (!tok) return;
@@ -682,6 +688,7 @@ export default function App() {
 
   return (
     <div style={{ background:T.bg, minHeight:"100vh", maxWidth:"430px", margin:"0 auto", position:"relative", fontFamily:T.sans, color:T.text }}>
+      <Header issueCount={issues.length} trialDays={trialDays} onRefresh={() => fetchIssues()} loading={loading} sessionId={sessionId} wsStatus={wsStatus} reconnectAttempts={reconnectAttempts} />
       <SetupWizard />
       <Header issueCount={issues.length} trialDays={trialDays} onRefresh={() => fetchIssues()} loading={loading} sessionId={sessionId} />
 
@@ -690,6 +697,7 @@ export default function App() {
       {tab === "capture"   && <CaptureTab   token={token}   onCreated={fetchIssues} />}
       {tab === "deadlines" && <DeadlinesTab />}
 
+      <ActionsPanel sessionId={sessionId} />
       <BottomNav tab={tab} setTab={setTab} p0Count={p0Count} />
     </div>
   );
