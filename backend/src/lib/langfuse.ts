@@ -52,10 +52,10 @@ export async function traceRun(params: TraceRunParams): Promise<void> {
     });
 
     const start = (params.metadata?.spanStart as string | undefined)
-      ? new Date(params.metadata.spanStart as string)
+      ? new Date(params.metadata?.spanStart as string)
       : undefined;
     const end = (params.metadata?.spanEnd as string | undefined)
-      ? new Date(params.metadata.spanEnd as string)
+      ? new Date(params.metadata?.spanEnd as string)
       : undefined;
 
     // Span covering the Claude API call window

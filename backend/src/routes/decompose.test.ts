@@ -5,7 +5,7 @@
 // Run: npx tsx backend/src/routes/decompose.test.ts
 // (requires ANTHROPIC_API_KEY in env — set in .env.local or CI secrets)
 
-import { decompose, type DecomposedPlan } from "../../../agents/decomposer.js";
+import { decompose, type DecomposedPlan } from "../agents/decomposer.js";
 
 const VALID_AGENTS = new Set([
   "LEGAL", "DISCOVERY", "FINANCE", "BUILD", "QA",

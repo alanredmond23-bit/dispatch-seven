@@ -1,7 +1,7 @@
 // Supabase client — D7 dispatch7 schema
 // Project: fifybuzwfaegloijrmqb
-// Keys pulled from env (set from Azure Key Vault at startup)
-// Note: Node 20 lacks native WebSocket; pass ws package as transport to avoid crash
+// Note: Node ≤20 lacks native WebSocket; pass ws package as transport.
+// Cast to any — ws satisfies the interface at runtime, TS type mismatch is cosmetic.
 
 import { createClient } from "@supabase/supabase-js";
 import ws from "ws";
@@ -13,8 +13,9 @@ if (!url || !key) {
   throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE must be set");
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const supabase = createClient(url, key, {
   db: { schema: "dispatch7" },
   auth: { persistSession: false },
-  realtime: { transport: ws },
+  realtime: { transport: ws as unknown as typeof WebSocket },
 });

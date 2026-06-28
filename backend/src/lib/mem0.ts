@@ -24,7 +24,7 @@ function withTimeout<T>(p: Promise<T>): Promise<T> {
 function getClient(): MemoryClient | null {
   const key = process.env.MEM0_API_KEY;
   if (!key) return null;
-  return new MemoryClient({ api_key: key });
+  return new MemoryClient({ apiKey: key });
 }
 
 export async function addMemory(
@@ -32,14 +32,14 @@ export async function addMemory(
   messages: { role: string; content: string }[],
   agentId = "dispatch7"
 ): Promise<void> {
-  // Fire-and-forget: Mem0 store
-  withTimeout(
+  // Fire-and-forget: Mem0 store — cast to Promise<void> to access .catch()
+  (withTimeout(
     (async () => {
       const client = getClient();
       if (!client) return;
-      await client.add(messages, { user_id: userId, agent_id: agentId });
+      await client.add(messages as any, { userId, agentId });
     })()
-  ).catch(() => {/* Mem0 down — silent */});
+  ) as Promise<void>).catch(() => {/* Mem0 down — silent */});
 
   // Sync assistant turn to Supabase dispatch7.memory with Voyage embedding.
   // Embedding is generated async and degraded gracefully if Voyage is unavailable.
@@ -78,10 +78,10 @@ export async function searchMemory(
     const client = getClient();
     if (!client) return [];
     const results = await withTimeout(
-      client.search(query, { user_id: userId, limit })
+      client.search(query, { userId, limit } as any)
     );
     // mem0ai returns array of {memory: string, ...}
-    return (results as Array<{ memory: string }>)
+    return ((results as any) as Array<{ memory: string }>)
       .map((r) => r.memory)
       .filter(Boolean);
   } catch {

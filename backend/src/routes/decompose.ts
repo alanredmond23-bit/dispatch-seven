@@ -5,7 +5,7 @@
 
 import { Hono } from "hono";
 import { supabase } from "../lib/supabase.js";
-import { decompose } from "../../../agents/decomposer.js";
+import { decompose } from "../agents/decomposer.js";
 
 // ── ORIGINAL ROUTE — /api/decompose ─────────────────────────────────────────
 export const decomposeRoutes = new Hono();
@@ -59,7 +59,7 @@ decomposeRoutes.post("/", async (c) => {
   }
 
   const edges: Array<{ task_id: string; depends_on: string }> = [];
-  plan.tasks.forEach((t, idx) => {
+  plan.tasks.forEach((t: DecomposedTask, idx: number) => {
     for (const depIdx of t.depends_on_indices ?? []) {
       if (depIdx < insertedTasks.length && idx < insertedTasks.length) {
         edges.push({
