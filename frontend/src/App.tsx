@@ -285,7 +285,7 @@ function TodayTab({ issues, sessionId }: { issues: any[]; sessionId?: string }) 
         </div>
       ))}
 
-      <TypingIndicator visible={isTyping || loading} />
+      <TypingIndicator visible={loading} />
 
       {!loading && schedule?.length === 0 && (
         <div style={{ ...css.card, fontFamily:T.mono, fontSize:"11px", color:T.muted }}>
@@ -745,7 +745,7 @@ export default function App() {
 
   return (
     <div style={{ background:T.bg, minHeight:"100vh", maxWidth:"430px", margin:"0 auto", position:"relative", fontFamily:T.sans, color:T.text }}>
-      <Header issueCount={issues.length} trialDays={trialDays} onRefresh={() => fetchIssues()} loading={loading} sessionId={sessionId} dailyTotal={dailyTotal} />
+      <Header issueCount={issues.length} trialDays={trialDays} onRefresh={() => fetchIssues()} loading={loading} sessionId={sessionId} dailyTotal={dailyTotal} wsStatus={wsStatus} reconnectAttempts={reconnectAttempts} />
 
       {/* T3b: CostBar below header */}
       <CostBar sessionId={sessionId} onSummary={handleSummary} />
@@ -783,8 +783,6 @@ export default function App() {
           </div>
         </div>
       )}
-      <Header issueCount={issues.length} trialDays={trialDays} onRefresh={() => fetchIssues()} loading={loading} sessionId={sessionId} wsStatus={wsStatus} reconnectAttempts={reconnectAttempts} />
-
       {tab === "today"     && <TodayTab     issues={issues} sessionId={sessionId} />}
       {tab === "board"     && <BoardTab     issues={issues} onDone={markDone} loading={loading} />}
       {tab === "capture"   && <CaptureTab   token={token}   onCreated={fetchIssues} sessionId={sessionId} onDecompose={setGraphTasks} />}
