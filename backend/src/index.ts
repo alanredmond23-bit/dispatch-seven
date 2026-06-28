@@ -16,8 +16,8 @@ import { buildWsHandler } from "./routes/ws.js";
 import { runsRoutes } from "./routes/runs.js";
 import { inngestRoutes } from "./routes/inngest.js";   // S3: Inngest event endpoint
 import { copilotRoutes } from "./routes/copilot.js";   // S3: CopilotKit runtime
-import { dagRoutes } from "./routes/dag.js";          // T7: DAG executor
-import { researchRoutes } from "./routes/research.js";    // T8: RESEARCH agent
+import { jobRoutes } from "./routes/jobs.js";          // T9: Inngest job queue API
+import { sessionRoutes } from "./routes/sessions.js";  // T10: active session listing
 
 const app = new Hono();
 
@@ -40,8 +40,8 @@ app.route("/api/v1/decompose", v1DecomposeRoutes); // T4: session-scoped Haiku p
 app.route("/api/v1/runs", runsRoutes);             // cost dashboard + usage tracking + task-graph
 app.route("/api/inngest", inngestRoutes);           // S3: Inngest webhook (event delivery)
 app.route("/api/copilot", copilotRoutes);           // S3: CopilotKit action runtime
-app.route("/api/v1/dag", dagRoutes);             // T7: DAG run + status
-app.route("/api/v1/research", researchRoutes);      // T8: RESEARCH direct invoke
+app.route("/api/v1/jobs", jobRoutes);                  // T9: job trigger + status
+app.route("/api/v1/sessions", sessionRoutes);          // T10: session list + message feed
 
 // WebSocket — must init before serve() so injectWebSocket can attach to the server
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
