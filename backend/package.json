@@ -20,7 +20,8 @@
     "inngest": "^3.22.0",
     "langfuse": "^3.38.20",
     "mem0ai": "^3.0.12",
-    "@azure/storage-blob": "^12.26.0"
+    "@azure/storage-blob": "^12.26.0",
+    "@anthropic-ai/sdk": "^0.40.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
