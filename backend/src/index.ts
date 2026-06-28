@@ -27,7 +27,7 @@ app.use("*", cors());
 
 // Health check
 app.get("/health", (c) =>
-  c.json({ status: "ok", service: "d7-backend", ts: new Date().toISOString() })
+  c.json({ status: "ok", version: "1.0.0", timestamp: Date.now() })
 );
 
 // REST routes
