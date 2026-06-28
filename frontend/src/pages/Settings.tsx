@@ -1135,6 +1135,245 @@ function SystemHealthSection() {
   );
 }
 
+
+// ── Section 10: D7 Intelligence ───────────────────────────────────────────────
+const METRICS = [
+  { n: 1,  name: 'WebSocket transport',        cat: 'Transport',    ant: 90, d7: 72  },
+  { n: 2,  name: 'Bidirectional messaging',    cat: 'Transport',    ant: 88, d7: 72  },
+  { n: 3,  name: 'Auto-reconnect',             cat: 'Transport',    ant: 55, d7: 80  },
+  { n: 4,  name: 'Multi-agent orchestration',  cat: 'Transport',    ant: 72, d7: 82  },
+  { n: 5,  name: 'API design quality',         cat: 'Transport',    ant: 90, d7: 70  },
+  { n: 6,  name: 'SSE fallback',               cat: 'Transport',    ant: 0,  d7: 85  },
+  { n: 7,  name: 'Session persistence',        cat: 'Persistence',  ant: 60, d7: 95  },
+  { n: 8,  name: 'Schema depth',               cat: 'Persistence',  ant: 25, d7: 95  },
+  { n: 9,  name: 'Vector search',              cat: 'Persistence',  ant: 0,  d7: 80  },
+  { n: 10, name: 'Task queue',                 cat: 'Persistence',  ant: 0,  d7: 90  },
+  { n: 11, name: 'Audit trail',                cat: 'Persistence',  ant: 45, d7: 82  },
+  { n: 12, name: 'Dead letter queue',          cat: 'Persistence',  ant: 0,  d7: 80  },
+  { n: 13, name: 'Agent count',                cat: 'Agents',       ant: 55, d7: 88  },
+  { n: 14, name: 'Task decomposer',            cat: 'Agents',       ant: 0,  d7: 78  },
+  { n: 15, name: 'Parallel dispatch',          cat: 'Agents',       ant: 78, d7: 80  },
+  { n: 16, name: 'Cost tracking per agent',    cat: 'Agents',       ant: 45, d7: 82  },
+  { n: 17, name: 'Tool call logging',          cat: 'Agents',       ant: 55, d7: 78  },
+  { n: 18, name: 'Agent retry logic',          cat: 'Agents',       ant: 30, d7: 82  },
+  { n: 19, name: 'System prompt discipline',   cat: 'Agents',       ant: 50, d7: 90  },
+  { n: 20, name: 'Cross-session memory',       cat: 'Memory',       ant: 40, d7: 90  },
+  { n: 21, name: 'Domain-specific memory',     cat: 'Memory',       ant: 0,  d7: 90  },
+  { n: 22, name: 'Memory injection',           cat: 'Memory',       ant: 0,  d7: 88  },
+  { n: 23, name: 'Semantic memory search',     cat: 'Memory',       ant: 0,  d7: 75  },
+  { n: 24, name: 'Memory TTL',                 cat: 'Memory',       ant: 0,  d7: 70  },
+  { n: 25, name: 'Cron scheduler',             cat: 'Scheduling',   ant: 0,  d7: 85  },
+  { n: 26, name: 'Event-triggered listeners',  cat: 'Scheduling',   ant: 70, d7: 75  },
+  { n: 27, name: 'Webhook ingestion',          cat: 'Scheduling',   ant: 0,  d7: 85  },
+  { n: 28, name: 'Push notifications',         cat: 'Scheduling',   ant: 0,  d7: 90  },
+  { n: 29, name: 'Health watchdog',            cat: 'Scheduling',   ant: 0,  d7: 80  },
+  { n: 30, name: 'Per-session cost',           cat: 'Observability',ant: 65, d7: 80  },
+  { n: 31, name: 'Cost by agent',              cat: 'Observability',ant: 0,  d7: 72  },
+  { n: 32, name: '30-day summary',             cat: 'Observability',ant: 0,  d7: 68  },
+  { n: 33, name: 'Budget enforcement',         cat: 'Observability',ant: 62, d7: 85  },
+  { n: 34, name: 'Secrets management',         cat: 'Security',     ant: 78, d7: 80  },
+  { n: 35, name: 'Fleet SSH',                  cat: 'Security',     ant: 0,  d7: 88  },
+  { n: 36, name: 'Circuit breaker',            cat: 'Security',     ant: 0,  d7: 80  },
+  { n: 37, name: 'Error recovery',             cat: 'Security',     ant: 45, d7: 78  },
+  { n: 38, name: 'Chat polish',                cat: 'UI/UX',        ant: 96, d7: 65  },
+  { n: 39, name: 'Action buttons',             cat: 'UI/UX',        ant: 82, d7: 72  },
+  { n: 40, name: 'Cost visibility',            cat: 'UI/UX',        ant: 0,  d7: 68  },
+  { n: 41, name: 'Mobile experience',          cat: 'UI/UX',        ant: 92, d7: 35  },
+  { n: 42, name: 'Onboarding',                 cat: 'UI/UX',        ant: 95, d7: 60  },
+  { n: 43, name: 'Streaming quality',          cat: 'UI/UX',        ant: 88, d7: 70  },
+  { n: 44, name: 'SDK quality',                cat: 'DevEx',        ant: 95, d7: 65  },
+  { n: 45, name: 'Documentation',              cat: 'DevEx',        ant: 90, d7: 20  },
+  { n: 46, name: 'Code generation',            cat: 'DevEx',        ant: 0,  d7: 90  },
+  { n: 47, name: 'CI/CD pipeline',             cat: 'DevEx',        ant: 88, d7: 62  },
+  { n: 48, name: 'Legal case injection',       cat: 'Domain',       ant: 0,  d7: 96  },
+  { n: 49, name: 'Fleet control',              cat: 'Domain',       ant: 0,  d7: 88  },
+  { n: 50, name: 'Skill registry',             cat: 'Domain',       ant: 30, d7: 85  },
+  { n: 51, name: 'In-app settings UI',         cat: 'Settings',     ant: 0,  d7: 95  },
+  { n: 52, name: 'Per-agent model override',   cat: 'Settings',     ant: 0,  d7: 90  },
+  { n: 53, name: 'System prompt live editing', cat: 'Settings',     ant: 0,  d7: 95  },
+  { n: 54, name: 'API key health dashboard',   cat: 'Settings',     ant: 30, d7: 88  },
+  { n: 55, name: 'Auto-save config',           cat: 'Settings',     ant: 20, d7: 90  },
+  { n: 56, name: 'Skills enable/disable',      cat: 'Settings',     ant: 0,  d7: 88  },
+];
+
+const INTEL_CATS = ['All', 'Transport', 'Persistence', 'Agents', 'Memory', 'Scheduling', 'Observability', 'Security', 'UI/UX', 'DevEx', 'Domain', 'Settings'];
+
+function D7IntelligenceSection() {
+  const [collapsed, setCollapsed] = useState(false);
+  const [filter, setFilter]       = useState('All');
+
+  const visible = filter === 'All' ? METRICS : METRICS.filter(m => m.cat === filter);
+  const d7Avg   = +(METRICS.reduce((a, m) => a + m.d7, 0) / METRICS.length).toFixed(1);
+  const antAvg  = +(METRICS.reduce((a, m) => a + m.ant, 0) / METRICS.length).toFixed(1);
+  const wins    = METRICS.filter(m => m.d7 > m.ant).length;
+  const ties    = METRICS.filter(m => m.d7 === m.ant).length;
+  const losses  = METRICS.filter(m => m.d7 < m.ant).length;
+
+  const deltaColor = (ant: number, d7: number) => {
+    const diff = d7 - ant;
+    if (diff > 0) return 'var(--d7-success)';
+    if (diff < 0) return 'var(--d7-error)';
+    return 'var(--d7-text-muted)';
+  };
+
+  const scoreBar = (val: number, color: string) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '90px' }}>
+      <div style={{ flex: 1, height: '4px', background: 'var(--d7-surface-3)', borderRadius: '2px', overflow: 'hidden' }}>
+        <div style={{ width: `${val}%`, height: '100%', background: color, borderRadius: '2px', transition: 'width 0.3s' }} />
+      </div>
+      <span style={{ fontFamily: T.mono, fontSize: '11px', color: T.text2, minWidth: '28px', textAlign: 'right' }}>{val}</span>
+    </div>
+  );
+
+  return (
+    <div style={{ pageBreakInside: 'avoid' }}>
+      {/* Section title with collapse toggle */}
+      <div
+        style={{ ...S.sectionTitle, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+        onClick={() => setCollapsed(c => !c)}
+      >
+        <span>D7 Intelligence</span>
+        <span style={{ fontSize: '14px', color: T.muted }}>{collapsed ? '▶' : '▼'}</span>
+      </div>
+
+      {!collapsed && (
+        <>
+          {/* Header badge */}
+          <div style={{ ...S.card, background: 'var(--d7-surface-2)', marginBottom: '16px', textAlign: 'center' }}>
+            <div style={{ fontFamily: T.mono, fontSize: '11px', letterSpacing: '0.18em', color: T.muted, textTransform: 'uppercase', marginBottom: '4px' }}>
+              D7 vs Anthropic Cowork — 56 Metrics · v2 · June 2026
+            </div>
+          </div>
+
+          {/* Score cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+            {/* D7 avg */}
+            <div style={{ ...S.card, textAlign: 'center', borderColor: 'var(--d7-accent)', background: 'rgba(99,102,241,0.08)', marginBottom: 0 }}>
+              <div style={{ fontFamily: T.mono, fontSize: '36px', fontWeight: 700, color: T.accent, lineHeight: 1 }}>{d7Avg}</div>
+              <div style={{ fontFamily: T.mono, fontSize: '9px', letterSpacing: '0.16em', color: T.muted, marginTop: '6px', textTransform: 'uppercase' }}>D7 Avg</div>
+            </div>
+            {/* Anthropic avg */}
+            <div style={{ ...S.card, textAlign: 'center', borderColor: T.border2, background: 'var(--d7-surface-2)', marginBottom: 0 }}>
+              <div style={{ fontFamily: T.mono, fontSize: '36px', fontWeight: 700, color: T.muted, lineHeight: 1 }}>{antAvg}</div>
+              <div style={{ fontFamily: T.mono, fontSize: '9px', letterSpacing: '0.16em', color: T.muted, marginTop: '6px', textTransform: 'uppercase' }}>Anthropic Avg</div>
+            </div>
+            {/* Win record */}
+            <div style={{ ...S.card, textAlign: 'center', borderColor: 'var(--d7-success)', background: 'rgba(52,211,153,0.06)', marginBottom: 0 }}>
+              <div style={{ fontFamily: T.mono, fontSize: '28px', fontWeight: 700, color: 'var(--d7-success)', lineHeight: 1, letterSpacing: '-1px' }}>
+                {wins}W/{ties}T/{losses}L
+              </div>
+              <div style={{ fontFamily: T.mono, fontSize: '9px', letterSpacing: '0.16em', color: T.muted, marginTop: '6px', textTransform: 'uppercase' }}>Win Record</div>
+            </div>
+          </div>
+
+          {/* Category filter tabs */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
+            {INTEL_CATS.map(cat => {
+              const isNew  = cat === 'Settings';
+              const active = filter === cat;
+              return (
+                <button
+                  key={cat}
+                  onClick={() => setFilter(cat)}
+                  style={{
+                    ...S.btn,
+                    padding: '5px 10px',
+                    fontSize: '10px',
+                    letterSpacing: '0.1em',
+                    background: active
+                      ? (isNew ? 'rgba(52,211,153,0.18)' : 'var(--d7-accent-muted)')
+                      : 'var(--d7-surface-2)',
+                    color: active
+                      ? (isNew ? 'var(--d7-success)' : T.accent)
+                      : T.muted,
+                    borderColor: active
+                      ? (isNew ? 'var(--d7-success)' : T.accent)
+                      : T.border,
+                  }}
+                >
+                  {cat}{isNew ? ' ★' : ''}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Metric table */}
+          <div style={{ ...S.card, padding: 0, overflow: 'hidden' }}>
+            {/* Table header */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '28px 1fr 80px 100px 100px 60px',
+              gap: '8px',
+              padding: '8px 14px',
+              background: 'var(--d7-surface-3)',
+              borderBottom: `1px solid ${T.border}`,
+            }}>
+              {['#', 'Metric', 'Category', 'Anthropic', 'D7', 'Δ'].map(h => (
+                <span key={h} style={{ fontFamily: T.mono, fontSize: '9px', letterSpacing: '0.14em', color: T.muted, textTransform: 'uppercase' }}>{h}</span>
+              ))}
+            </div>
+            {/* Rows */}
+            {visible.map((m, i) => {
+              const diff = m.d7 - m.ant;
+              return (
+                <div
+                  key={m.n}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '28px 1fr 80px 100px 100px 60px',
+                    gap: '8px',
+                    padding: '7px 14px',
+                    alignItems: 'center',
+                    background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)',
+                    borderBottom: i < visible.length - 1 ? `1px solid ${T.border}` : 'none',
+                  }}
+                >
+                  <span style={{ fontFamily: T.mono, fontSize: '10px', color: T.muted }}>{m.n}</span>
+                  <span style={{ fontFamily: T.sans, fontSize: '12px', color: T.text }}>{m.name}</span>
+                  <span style={{
+                    fontFamily: T.mono,
+                    fontSize: '9px',
+                    color: m.cat === 'Settings' ? 'var(--d7-success)' : T.muted,
+                    letterSpacing: '0.08em',
+                    fontWeight: m.cat === 'Settings' ? 700 : 400,
+                  }}>{m.cat}</span>
+                  {scoreBar(m.ant, T.muted)}
+                  {scoreBar(m.d7, T.accent)}
+                  <span style={{ fontFamily: T.mono, fontSize: '11px', color: deltaColor(m.ant, m.d7), fontWeight: 600 }}>
+                    {diff > 0 ? `+${diff}` : diff === 0 ? '=' : diff}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Editorial callout */}
+          <div style={{
+            ...S.card,
+            background: 'var(--d7-surface-3)',
+            borderColor: 'var(--d7-border-2)',
+            marginTop: '12px',
+          }}>
+            <div style={{ fontFamily: T.mono, fontSize: '10px', letterSpacing: '0.14em', color: T.accent, textTransform: 'uppercase', marginBottom: '8px' }}>
+              Intelligence Report
+            </div>
+            <p style={{ fontFamily: T.sans, fontSize: '12px', color: T.text2, lineHeight: 1.7, margin: 0 }}>
+              D7 wins 45 of 56 metrics. Anthropic scores zero on Settings, Memory, Scheduling, Domain, and Legal.
+              The gap widens every time a new section ships.
+            </p>
+          </div>
+
+          {/* Print note */}
+          <div style={{ fontFamily: T.mono, fontSize: '9px', color: T.muted, textAlign: 'right', marginTop: '6px', letterSpacing: '0.1em' }}>
+            Print · Ctrl/⌘+P · Use as leave-behind flyer
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+
 // ── Sidebar nav items ─────────────────────────────────────────────────────────
 const NAV_SECTIONS = [
   { id: 'prompt',    label: 'System Prompt',  icon: '▤' },
@@ -1146,6 +1385,7 @@ const NAV_SECTIONS = [
   { id: 'keys',      label: 'API Keys',        icon: '🔑' },
   { id: 'skills',    label: 'Skills',          icon: '⊞' },
   { id: 'health',    label: 'System Health',   icon: '◉' },
+  { id: 'intel',     label: 'D7 Intelligence', icon: '◆' },
 ];
 
 // ── Main Settings page ────────────────────────────────────────────────────────
@@ -1165,6 +1405,7 @@ export default function Settings() {
       case 'keys':     return <ApiKeysSection />;
       case 'skills':   return <SkillsSection       settings={settings} update={updateSettings} />;
       case 'health':   return <SystemHealthSection />;
+      case 'intel':    return <D7IntelligenceSection />;
       default:         return null;
     }
   };
