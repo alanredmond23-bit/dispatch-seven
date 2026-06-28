@@ -1,3 +1,7 @@
+import CostBar from "./components/CostBar";
+import TaskGraph from "./components/TaskGraph";
+import type { GraphTask } from "./components/TaskGraph";
+import { useDecompose } from "./hooks/useDecompose";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { generateScheduleViaWs } from "./lib/wsSchedule";
 import CitationBlock, { parseMessageCitations } from "./components/CitationBlock";
@@ -389,7 +393,7 @@ function BoardTab({ issues, onDone, loading }) {
 }
 
 // ── CAPTURE TAB ───────────────────────────────────────────────────────────────
-function CaptureTab({ token, onCreated }) {
+function CaptureTab({ token, onCreated, sessionId, onDecompose }) {
   const [title,      setTitle]      = useState("");
   const [priority,   setPriority]   = useState("p1-high");
   const [domain,     setDomain]     = useState("DEVOPS");
@@ -398,6 +402,8 @@ function CaptureTab({ token, onCreated }) {
   const [submitting, setSubmitting] = useState(false);
   const [status,     setStatus]     = useState(null);
   const recRef = useRef(null);
+  // T4c: auto-decompose multi-step goals before submitting to WS
+  const { maybeDecompose, decomposing } = useDecompose(sessionId ?? "capture");
 
   const startVoice = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -418,6 +424,10 @@ function CaptureTab({ token, onCreated }) {
     if (!title.trim()) return;
     setSubmitting(true);
     setStatus(null);
+    // T4c: if title looks multi-step, decompose before creating the issue
+    const combinedGoal = note ? `${title.trim()}\n${note}` : title.trim();
+    const decomposed = await maybeDecompose(combinedGoal);
+    if (decomposed) onDecompose?.(decomposed);
     try {
       const agentLabel = domain === "FED" ? "agent:legal" : domain === "FINANCE" ? "agent:finance" : "agent:build";
       const issue = await gh.post(
@@ -570,7 +580,7 @@ function DeadlinesTab() {
 }
 
 // ── HEADER ────────────────────────────────────────────────────────────────────
-function Header({ issueCount, trialDays, onRefresh, loading, sessionId }) {
+function Header({ issueCount, trialDays, onRefresh, loading, sessionId, dailyTotal }) {
   return (
     <div style={{ background:T.bg, borderBottom:`1px solid ${T.border}`, padding:"12px 16px", display:"flex", justifyContent:"space-between", alignItems:"center", position:"sticky", top:0, zIndex:10 }}>
       <div style={{ display:"flex", alignItems:"center", gap:"10px" }}>
@@ -584,6 +594,11 @@ function Header({ issueCount, trialDays, onRefresh, loading, sessionId }) {
       </div>
       <div style={{ display:"flex", alignItems:"center", gap:"12px" }}>
         <CostBadge sessionId={sessionId} />
+        {dailyTotal != null && (
+          <span style={{ fontFamily:T.mono, fontSize:"9px", color:T.muted, letterSpacing:"0.08em", whiteSpace:"nowrap" }}>
+            Today: ${dailyTotal.toFixed(2)}
+          </span>
+        )}
         <span style={{ fontFamily:T.mono, fontSize:"11px", color: trialDays <= 30 ? "#dc2626" : T.muted, letterSpacing:"0.1em" }}>
           {trialDays}d
         </span>
@@ -640,6 +655,33 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   // Stable session ID for cost tracking — new value per page load, no persistence needed
   const sessionId = useRef(typeof crypto !== "undefined" ? crypto.randomUUID() : Math.random().toString(36).slice(2)).current;
+  // T3c/T3d: daily cost + budget state, fed by CostBar via onSummary callback
+  const [dailyTotal,  setDailyTotal]  = useState<number | null>(null);
+  const [budgetPct,   setBudgetPct]   = useState<number>(0);
+  const [budgetModal, setBudgetModal] = useState(false);
+  const [graphTasks,  setGraphTasks]  = useState<GraphTask[] | null>(null);
+
+  const handleSummary = useCallback((s: { daily_total_usd: number; budget_pct: number }) => {
+    setDailyTotal(s.daily_total_usd);
+    if (s.budget_pct >= 100 && !budgetModal) setBudgetModal(true);
+    setBudgetPct(s.budget_pct);
+  }, [budgetModal]);
+
+  const handleNewSession = () => {
+    // Clear session by reloading — sessionId is page-scoped, so reload creates new one
+    window.location.reload();
+  };
+
+  const handleOverrideBudget = async () => {
+    try {
+      await fetch("/api/v1/runs/override-budget", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+    } catch { /* non-critical */ }
+    setBudgetModal(false);
+  };
 
   const fetchIssues = useCallback(async (tok = token) => {
     if (!tok) return;
@@ -674,11 +716,48 @@ export default function App() {
 
   return (
     <div style={{ background:T.bg, minHeight:"100vh", maxWidth:"430px", margin:"0 auto", position:"relative", fontFamily:T.sans, color:T.text }}>
-      <Header issueCount={issues.length} trialDays={trialDays} onRefresh={() => fetchIssues()} loading={loading} sessionId={sessionId} />
+      <Header issueCount={issues.length} trialDays={trialDays} onRefresh={() => fetchIssues()} loading={loading} sessionId={sessionId} dailyTotal={dailyTotal} />
+
+      {/* T3b: CostBar below header */}
+      <CostBar sessionId={sessionId} onSummary={handleSummary} />
+
+      {/* T4b: TaskGraph shown when decomposition exists */}
+      {graphTasks && (
+        <div style={{ padding:"8px 16px 0" }}>
+          <div style={{ fontFamily:"'JetBrains Mono','Fira Code',monospace", fontSize:"9px", color:"#3b82f6", letterSpacing:"0.16em", marginBottom:"6px" }}>
+            MULTI-STEP TASK DETECTED — DECOMPOSING...
+          </div>
+          <TaskGraph sessionId={sessionId} initialTasks={graphTasks} onDismiss={() => setGraphTasks(null)} />
+        </div>
+      )}
+
+      {/* T3d: Budget modal */}
+      {budgetModal && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(5,8,16,0.88)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:100, padding:"24px" }}>
+          <div style={{ background:"#090e1a", border:"1px solid #dc2626", padding:"28px 24px", maxWidth:"340px", width:"100%" }}>
+            <div style={{ fontFamily:"'JetBrains Mono','Fira Code',monospace", fontSize:"10px", color:"#dc2626", letterSpacing:"0.18em", marginBottom:"14px" }}>
+              BUDGET REACHED
+            </div>
+            <div style={{ fontFamily:"'Inter',system-ui,sans-serif", fontSize:"14px", color:"#e2e8f0", lineHeight:1.5, marginBottom:"24px" }}>
+              Session budget reached (${(budgetPct / 100 * 1).toFixed(2)}). Start a new session or continue with overage.
+            </div>
+            <div style={{ display:"flex", gap:"10px" }}>
+              <button onClick={handleNewSession}
+                style={{ flex:1, background:"#1d4ed8", border:"none", color:"#fff", padding:"12px", cursor:"pointer", fontFamily:"'JetBrains Mono','Fira Code',monospace", fontSize:"10px", letterSpacing:"0.12em" }}>
+                NEW SESSION
+              </button>
+              <button onClick={handleOverrideBudget}
+                style={{ flex:1, background:"none", border:"1px solid #4a5568", color:"#4a5568", padding:"12px", cursor:"pointer", fontFamily:"'JetBrains Mono','Fira Code',monospace", fontSize:"10px", letterSpacing:"0.12em" }}>
+                CONTINUE
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {tab === "today"     && <TodayTab     issues={issues} sessionId={sessionId} />}
       {tab === "board"     && <BoardTab     issues={issues} onDone={markDone} loading={loading} />}
-      {tab === "capture"   && <CaptureTab   token={token}   onCreated={fetchIssues} />}
+      {tab === "capture"   && <CaptureTab   token={token}   onCreated={fetchIssues} sessionId={sessionId} onDecompose={setGraphTasks} />}
       {tab === "deadlines" && <DeadlinesTab />}
 
       <BottomNav tab={tab} setTab={setTab} p0Count={p0Count} />
