@@ -6,9 +6,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "vitest run",
-    "test:integration": "vitest run src/test/integration",
-    "test:unit": "vitest run src"
+    "test": "vitest run"
   },
   "dependencies": {
     "@azure/identity": "^4.5.0",
@@ -17,19 +15,15 @@
     "@hono/node-ws": "^1.3.1",
     "@supabase/supabase-js": "^2.46.0",
     "hono": "^4.6.0",
-    "inngest": "^3.22.0",
+    "inngest": "^4.11.0",
     "langfuse": "^3.38.20",
     "mem0ai": "^3.0.12",
-    "@azure/storage-blob": "^12.26.0",
-    "@anthropic-ai/sdk": "^0.40.1"
+    "openai": "^4.67.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.0",
-    "ws": "^8.18.0",
-    "@types/ws": "^8.5.13"
-  },
-  "type": "module"
+    "vitest": "^2.1.0"
+  }
 }
