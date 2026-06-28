@@ -33,10 +33,12 @@ jobs:
         run: npm run build
         env:
           VITE_BASE_PATH: /dispatch-seven/
-          VITE_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # VITE_GITHUB_OWNER and VITE_GITHUB_REPO are public — safe to embed
           VITE_GITHUB_OWNER: alanredmond23-bit
           VITE_GITHUB_REPO: dispatch-seven
-          VITE_GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          # REMOVED: VITE_GITHUB_TOKEN — PATs baked into static bundles are extractable
+          # REMOVED: VITE_ANTHROPIC_API_KEY — API keys must never be in frontend bundles
+          # If GitHub API access is needed from the frontend, proxy via the ACA backend
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
