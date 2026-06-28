@@ -1,7 +1,7 @@
 {
   "name": "d7-backend",
   "version": "0.1.0",
-  "description": "D7 Dispatch Seven \u2014 Hono 4 API backend",
+  "description": "D7 Dispatch Seven — Hono 4 API backend",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
