@@ -1,7 +1,11 @@
-// D7 WebSocket transport — bidirectional Claude streaming
+// D7 WebSocket transport — bidirectional streaming (Anthropic + OpenAI-compatible)
 // Route: GET /ws?session_id=<id>
 // Replaces direct frontend→Anthropic fetch with backend-proxied streaming.
 // SSE endpoint (/api/v1/stream) left intact as fallback for older clients.
+//
+// Provider routing:
+//   'anthropic' → native Anthropic SSE fetch (original path, unchanged)
+//   'openai' | 'groq' | 'ollama' → OpenAI SDK with baseURL override
 //
 // Message protocol (client → server):
 //   { type: "message", content: string, session_id: string }
@@ -14,16 +18,17 @@
 //   { type: "ping" }                              — heartbeat (30s)
 
 import type { UpgradeWebSocket } from "hono/ws";
+import OpenAI from "openai";
 import { trackRun } from "../lib/cost-tracker.js";
 import { getRelevantContext, addMemory } from "../lib/mem0.js";
 import { traceRun } from "../lib/langfuse.js";
 import { supabase } from "../lib/supabase.js";
 import { extractCitations, verifyCitation } from "../lib/citation-extractor.js";
 import { parseAndInsertActions } from "../middleware/actions-parser.js";
-import { parseSchedulerOutput, upsertScheduledTasks } from "../lib/scheduler-runner.js";
 import { classifyMessage } from "../lib/classifier.js";
 import { loadAgent } from "../lib/agent-loader.js";
 import { budgetOverrides } from "../lib/session-store.js";
+import type { ProviderConfig } from "../lib/provider.js";
 
 const ANTHROPIC_URL    = "https://api.anthropic.com/v1/messages";
 const PING_INTERVAL_MS = 30_000;
@@ -31,13 +36,8 @@ const PONG_TIMEOUT_MS  = 10_000;
 
 // ── BUDGET CAP ───────────────────────────────────────────────────────────────
 // Per-session hard cap. Set BUDGET_CAP_USD in env; default $1.00.
-// Ponytail: session-level cap — per-user caps when multi-tenant
 const BUDGET_CAP_USD = parseFloat(process.env.BUDGET_CAP_USD ?? "1.00");
 
-/**
- * checkBudget — returns the current session spend.
- * Throws if BUDGET_CAP_USD is exceeded.
- */
 async function checkBudget(sessionId: string): Promise<void> {
   const { data, error } = await supabase
     .from("agent_runs")
@@ -45,7 +45,6 @@ async function checkBudget(sessionId: string): Promise<void> {
     .eq("session_id", sessionId);
 
   if (error) {
-    // Supabase unavailable — fail open (do not block the request)
     console.warn(`[budget] query failed for session=${sessionId}: ${error.message}`);
     return;
   }
@@ -55,7 +54,6 @@ async function checkBudget(sessionId: string): Promise<void> {
     0
   );
 
-  // If user clicked "Continue anyway", allow overage for this session
   if (totalSpend >= BUDGET_CAP_USD && !budgetOverrides.has(sessionId)) {
     throw new BudgetCapError(totalSpend);
   }
@@ -67,7 +65,6 @@ class BudgetCapError extends Error {
   }
 }
 
-
 // Build citation appendix from extracted + verified citations
 async function buildCitationBlock(fullText: string): Promise<string> {
   const citations = extractCitations(fullText);
@@ -75,7 +72,6 @@ async function buildCitationBlock(fullText: string): Promise<string> {
     return "\n\n---\n**CITATIONS**\n⚠️ No citations extracted — legal claims should be verified manually.";
   }
 
-  // Verify all citations in parallel with 3s timeout each
   const verified = await Promise.all(
     citations.map(async (c) => {
       const result = await verifyCitation(c.citation);
@@ -92,36 +88,31 @@ async function buildCitationBlock(fullText: string): Promise<string> {
   return "\n\n---\n**CITATIONS**\n" + lines.join("\n");
 }
 
-// ── CLAUDE STREAMING ─────────────────────────────────────────────────────────
-// Stream Claude tokens, calling onToken per chunk.
-// Returns { input_tokens, output_tokens, fullResponse } captured from SSE events.
-// systemPrompt: prepended context (mem0 injection, legal system prompt, etc.)
-async function streamClaude(
+// ── ANTHROPIC STREAMING ───────────────────────────────────────────────────────
+// Original Anthropic SSE path — preserved unchanged for 'anthropic' provider.
+async function streamAnthropic(
+  config: ProviderConfig,
   content: string,
   onToken: (tok: string) => void,
   systemPrompt?: string,
-  model = "claude-sonnet-4-6",
   maxTokens = 4096
 ): Promise<{ input_tokens: number; output_tokens: number; fullResponse: string }> {
   const usage = { input_tokens: 0, output_tokens: 0 };
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
+  if (!config.apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
 
   const body: Record<string, unknown> = {
-    model,
+    model:      config.model,
     max_tokens: maxTokens,
     stream:     true,
-    messages: [{ role: "user", content }],
+    messages:   [{ role: "user", content }],
   };
-  if (systemPrompt) {
-    body.system = systemPrompt;
-  }
+  if (systemPrompt) body.system = systemPrompt;
 
   const res = await fetch(ANTHROPIC_URL, {
     method: "POST",
     headers: {
       "Content-Type":      "application/json",
-      "x-api-key":         apiKey,
+      "x-api-key":         config.apiKey,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(body),
@@ -155,19 +146,77 @@ async function streamClaude(
           usage.input_tokens = evt.message.usage.input_tokens ?? 0;
         } else if (evt.type === "message_delta" && evt.usage) {
           usage.output_tokens = evt.usage.output_tokens ?? 0;
-        } else if (
-          evt.type === "content_block_delta" &&
-          evt.delta?.type === "text_delta"
-        ) {
+        } else if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") {
           onToken(evt.delta.text);
           fullResponse += evt.delta.text;
         }
-      } catch {
-        // malformed JSON line — skip
-      }
+      } catch { /* malformed JSON line — skip */ }
     }
   }
   return { ...usage, fullResponse };
+}
+
+// ── OPENAI-COMPATIBLE STREAMING ───────────────────────────────────────────────
+// Handles OpenAI, Groq, Ollama. All use the same OpenAI SDK with baseURL override.
+// Token counts: OpenAI/Groq return usage on the final chunk; Ollama may not.
+async function streamOpenAI(
+  config: ProviderConfig,
+  content: string,
+  onToken: (tok: string) => void,
+  systemPrompt?: string,
+  maxTokens = 4096
+): Promise<{ input_tokens: number; output_tokens: number; fullResponse: string }> {
+  const client = new OpenAI({
+    apiKey:  config.apiKey,
+    baseURL: config.baseURL,
+  });
+
+  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+  if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
+  messages.push({ role: "user", content });
+
+  // stream_options.include_usage: returns token counts on the final [DONE] chunk
+  const stream = await client.chat.completions.create({
+    model:          config.model,
+    messages,
+    max_tokens:     maxTokens,
+    stream:         true,
+    stream_options: { include_usage: true },
+  });
+
+  let fullResponse = "";
+  let input_tokens  = 0;
+  let output_tokens = 0;
+
+  for await (const chunk of stream) {
+    const delta = chunk.choices[0]?.delta?.content;
+    if (delta) {
+      onToken(delta);
+      fullResponse += delta;
+    }
+    // usage arrives on the last chunk when stream_options.include_usage is set
+    if (chunk.usage) {
+      input_tokens  = chunk.usage.prompt_tokens     ?? 0;
+      output_tokens = chunk.usage.completion_tokens ?? 0;
+    }
+  }
+
+  return { input_tokens, output_tokens, fullResponse };
+}
+
+// ── UNIFIED STREAMING ENTRY POINT ─────────────────────────────────────────────
+// Routes to Anthropic or OpenAI path based on providerConfig.type.
+async function streamWithProvider(
+  config: ProviderConfig,
+  content: string,
+  onToken: (tok: string) => void,
+  systemPrompt?: string,
+  maxTokens = 4096
+): Promise<{ input_tokens: number; output_tokens: number; fullResponse: string }> {
+  if (config.type === "anthropic") {
+    return streamAnthropic(config, content, onToken, systemPrompt, maxTokens);
+  }
+  return streamOpenAI(config, content, onToken, systemPrompt, maxTokens);
 }
 
 // ── WS HANDLER ───────────────────────────────────────────────────────────────
@@ -188,9 +237,7 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
               console.warn(`[WS] pong timeout session=${sessionId} — closing`);
               ws.close(1001, "pong timeout");
             }, PONG_TIMEOUT_MS);
-          } catch {
-            // socket already closed
-          }
+          } catch { /* socket already closed */ }
         }, PING_INTERVAL_MS);
       },
 
@@ -217,20 +264,29 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
           return;
         }
 
-        const sid = msg.session_id ?? sessionId;
+        const sid         = msg.session_id ?? sessionId;
         const userMessage = msg.content;
 
         // ── AGENT ROUTING — classify message, load agent config ─────────────
         const agentFromMsg = msg.agent;
-        const domain = classifyMessage(userMessage);
-        const agentConfig = loadAgent(domain);
-        const agentLabel = agentFromMsg ?? domain;
-        console.log(`[WS] message session=${sid} len=${userMessage.length} agent=${agentLabel}`);
+        const domain       = classifyMessage(userMessage);
+        const agentConfig  = loadAgent(domain);
+        const agentLabel   = agentFromMsg ?? domain;
+        const isLegal      = domain === "LEGAL"; // used for citation block + Langfuse metadata
 
-        // ── ROUTE INDICATOR — tell frontend which agent is handling this ──────
-        ws.send(JSON.stringify({ type: "route", agent: domain, model: agentConfig.model }));
-        // ── P0: TASK STATUS — write 'running' to dispatch7.tasks ───────────
-        // taskId is stable per WS turn: session + timestamp
+        console.log(
+          `[WS] message session=${sid} len=${userMessage.length} agent=${agentLabel} provider=${agentConfig.provider}`
+        );
+
+        // ── ROUTE INDICATOR ──────────────────────────────────────────────────
+        ws.send(JSON.stringify({
+          type:     "route",
+          agent:    domain,
+          model:    agentConfig.model,
+          provider: agentConfig.provider,
+        }));
+
+        // ── P0: TASK STATUS — write 'running' ────────────────────────────────
         const taskId      = `task-${sid}-${Date.now()}`;
         const taskStarted = new Date().toISOString();
         writeTaskStatus({
@@ -242,20 +298,18 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
           agent_name:   agentLabel,
           cost_usd:     0,
           started_at:   taskStarted,
-        }).catch(console.error); // fire-and-forget — never block WS
+        }).catch(console.error);
 
-        // --- Mem0: fetch relevant context from prior sessions ---
+        // ── MEM0: fetch relevant context ─────────────────────────────────────
         let systemPrompt: string | undefined = agentConfig.systemPrompt;
         try {
           const memCtx = await getRelevantContext(sid, userMessage);
           if (memCtx) {
             systemPrompt = `${agentConfig.systemPrompt}\n\n---\nMemories from prior sessions:\n${memCtx}`;
           }
-        } catch {
-          // Mem0 down — proceed without context
-        }
+        } catch { /* Mem0 down — proceed without context */ }
 
-        // ── BUDGET CHECK (before any Anthropic call) ────────────────────────
+        // ── BUDGET CHECK ─────────────────────────────────────────────────────
         try {
           await checkBudget(sid);
         } catch (err: unknown) {
@@ -264,60 +318,45 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
             ws.close(1008, "budget cap reached");
             return;
           }
-          // Any other budget-check error: fail open, log, continue
           console.error("[budget] unexpected error:", err);
         }
 
-        // ── LANGFUSE TRACE SETUP ────────────────────────────────────────────
+        // ── LANGFUSE TRACE SETUP ─────────────────────────────────────────────
         const traceId   = `${sid}-${Date.now()}`;
         const spanStart = new Date().toISOString();
-        let   outputBuf = ""; // accumulate output for Langfuse
+        let   outputBuf = "";
 
-        // Cost tracking: start row before Claude call
+        // Cost tracking
         const tracker = trackRun({ session_id: sid, agent: agentLabel, model: agentConfig.model });
         const runId   = await tracker.start().catch(() => null);
 
         try {
-          const { fullResponse, ...usage } = await streamClaude(
+          const { fullResponse, ...usage } = await streamWithProvider(
+            agentConfig.providerConfig,
             userMessage,
             (token) => {
               outputBuf += token;
               ws.send(JSON.stringify({ type: "token", content: token }));
             },
             systemPrompt,
-            agentConfig.model,
             agentConfig.maxTokens
           );
 
-          // Legal responses: extract and verify citations, then stream the citation block
-          if (domain === "LEGAL" && fullResponse) {
+          // Legal: extract + verify citations, stream citation block
+          if (isLegal && fullResponse) {
             const citationBlock = await buildCitationBlock(fullResponse);
-            // Stream citation block as additional tokens so the client receives it inline
             outputBuf += citationBlock;
             ws.send(JSON.stringify({ type: "token", content: citationBlock }));
           }
 
-          // FIX A: wire actions parser — extract and persist embedded action blocks
+          // Parse embedded action blocks
           try {
             await parseAndInsertActions(fullResponse, sid);
           } catch (actErr) {
             console.error("[actions-parser] non-fatal:", actErr);
           }
-          // T11: SCHEDULER upsert — if SCHEDULER agent handled this turn, persist tasks
-          if (domain === "SCHEDULER" && fullResponse) {
-            try {
-              const schedParsed = parseSchedulerOutput(fullResponse);
-              if (schedParsed && schedParsed.tasks.length > 0) {
-                await upsertScheduledTasks(schedParsed, sid);
-              }
-            } catch (schedErr) {
-              console.error("[scheduler-runner] non-fatal:", schedErr);
-            }
-          }
 
-          // Detect orchestrator routing JSON { "agent": "...", "task": "...", "priority": "..." }
-          // and emit a spawn_task action so agent routing is visible in the ActionsPanel.
-          // Ponytail: single regex, fire-and-forget — never blocks WS response.
+          // Orchestrator routing detection
           try {
             const routeMatch = fullResponse.match(
               /\{[^{}]*"agent"\s*:\s*"([A-Z]+)"[^{}]*"task"\s*:\s*"([^"]+)"[^{}]*\}/
@@ -329,26 +368,23 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   session_id: sid,
-                  agent: "ORCHESTRATOR",
-                  type:  "spawn_task",
+                  agent:   "ORCHESTRATOR",
+                  type:    "spawn_task",
                   payload: { target_agent: routeMatch[1], task_title: routeMatch[2] },
                 }),
               }).catch(() => {/* non-fatal */});
             }
-          } catch {
-            // non-fatal — routing detection must not crash WS handler
-          }
+          } catch { /* routing detection must not crash WS handler */ }
 
           ws.send(JSON.stringify({ type: "done", session_id: sid }));
 
           const spanEnd = new Date().toISOString();
 
-          // Cost tracking — fire-and-forget so WS response isn't delayed
           if (runId) tracker.finish(runId, usage).catch(console.error);
 
-          // ── P0: TASK STATUS — mark done with final cost ─────────────────
-          const { calculateCost: calcCostDone } = await import("../lib/cost-tracker.js");
-          const finalCost = calcCostDone("claude-sonnet-4-6", usage.input_tokens, usage.output_tokens);
+          const { calculateCost } = await import("../lib/cost-tracker.js");
+          const finalCost = calculateCost(agentConfig.model, usage.input_tokens, usage.output_tokens);
+
           writeTaskStatus({
             task_id:      taskId,
             session_id:   sid,
@@ -360,33 +396,24 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
             started_at:   taskStarted,
           }).catch(console.error);
 
-          // ── LANGFUSE: trace + span + cost score ─────────────────────────
-          // Wrapped in try/catch — Langfuse down must not affect WS handler
-          const { calculateCost } = await import("../lib/cost-tracker.js");
-          const costUsd = calculateCost(
-            agentConfig.model,
-            usage.input_tokens,
-            usage.output_tokens
-          );
-
           traceRun({
             traceId,
             agentName: agentLabel,
             input:     userMessage,
             output:    outputBuf,
-            costUsd,
+            costUsd:   finalCost,
             metadata: {
               session_id:   sid,
               model:        agentConfig.model,
+              provider:     agentConfig.provider,
               inputTokens:  usage.input_tokens,
               outputTokens: usage.output_tokens,
               spanStart,
               spanEnd,
-              isLegal:      domain === "LEGAL",
+              isLegal,
             },
-          }).catch(console.error); // truly fire-and-forget
+          }).catch(console.error);
 
-          // --- Mem0: store conversation turn after response ---
           addMemory(sid, [
             { role: "user",      content: userMessage  },
             { role: "assistant", content: fullResponse },
@@ -397,7 +424,6 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
           console.error(`[WS] stream error session=${sid}:`, message);
           ws.send(JSON.stringify({ type: "error", message }));
 
-          // ── P0: TASK STATUS — mark failed ───────────────────────────────
           writeTaskStatus({
             task_id:      taskId,
             session_id:   sid,
@@ -428,20 +454,6 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
 }
 
 // ── P0: TASK STATUS WRITER ────────────────────────────────────────────────────
-// writeTaskStatus() upserts a row in dispatch7.tasks so the TaskBoard component
-// can display real-time progress for every agent run.
-//
-// Called three times per WS turn:
-//   1. onMessage received → status: 'running'
-//   2. stream complete    → status: 'done'
-//   3. error thrown       → status: 'failed'
-//
-// task_id is derived from session_id + timestamp so it's unique per turn.
-// The TaskBoard polls /api/v1/tasks?session_id=X and renders these rows.
-//
-// Ponytail: fire-and-forget — Supabase down must not affect WS response latency.
-// Schema note: tasks table in dispatch7 uses assigned_agent, not agent_name.
-
 export interface TaskStatusPayload {
   task_id:      string;
   session_id:   string;
@@ -450,21 +462,16 @@ export interface TaskStatusPayload {
   progress_pct: number;
   agent_name:   string;
   cost_usd:     number;
-  started_at?:  string; // ISO — set on first write
-  error?:       string; // set on failure
+  started_at?:  string;
+  error?:       string;
 }
 
-/**
- * writeTaskStatus — upsert a task progress row into dispatch7.tasks.
- * Fire-and-forget: caller should .catch(console.error) and not await.
- */
 export async function writeTaskStatus(payload: TaskStatusPayload): Promise<void> {
   const {
     task_id, session_id, title, status, progress_pct,
     agent_name, cost_usd, started_at, error,
   } = payload;
 
-  // Map to tasks table schema (assigned_agent = agent_name, metadata carries the rest)
   const { error: dbErr } = await supabase
     .from("tasks")
     .upsert(
@@ -473,18 +480,18 @@ export async function writeTaskStatus(payload: TaskStatusPayload): Promise<void>
         title,
         status:         status === "running" ? "in_progress"
                       : status === "done"    ? "completed"
-                      : status,              // 'queued' | 'failed' map directly
+                      : status,
         assigned_agent: agent_name,
         metadata: {
           session_id,
           progress_pct,
           cost_usd,
           agent_name,
-          started_at:    started_at ?? new Date().toISOString(),
-          completed_at:  (status === "done" || status === "failed")
-                           ? new Date().toISOString()
-                           : null,
-          error:         error ?? null,
+          started_at:   started_at ?? new Date().toISOString(),
+          completed_at: (status === "done" || status === "failed")
+                          ? new Date().toISOString()
+                          : null,
+          error: error ?? null,
         },
         updated_at: new Date().toISOString(),
       },
@@ -492,7 +499,6 @@ export async function writeTaskStatus(payload: TaskStatusPayload): Promise<void>
     );
 
   if (dbErr) {
-    // Non-fatal — log and continue. WS response is not blocked.
     console.warn(`[writeTaskStatus] upsert failed task_id=${task_id}: ${dbErr.message}`);
   }
 }
