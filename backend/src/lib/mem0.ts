@@ -55,17 +55,18 @@ export async function addMemory(
       // VOYAGE_API_KEY not set or API unreachable — store row without vector
     }
 
-    supabase
-      .schema("dispatch7")
-      .from("memory")
-      .insert({
-        session_id: userId,
-        content: snippet,
-        ...(embedding ? { embedding } : {}),
-        metadata: { role: "assistant", via: "mem0", model: "voyage-3-lite" },
-      })
-      .then(() => {/* ignore */})
-      .catch(() => {/* Supabase down — silent */});
+    // Use Promise.resolve() to coerce PromiseLike to Promise (Supabase builder quirk)
+    void Promise.resolve(
+      supabase
+        .schema("dispatch7")
+        .from("memory")
+        .insert({
+          session_id: userId,
+          content: snippet,
+          ...(embedding ? { embedding } : {}),
+          metadata: { role: "assistant", via: "mem0", model: "voyage-3-lite" },
+        })
+    ).catch(() => {/* Supabase down — silent */});
   }
 }
 

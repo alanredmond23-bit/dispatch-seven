@@ -4,7 +4,7 @@
 // rather than a streamed chat response.
 
 import { Hono } from "hono";
-import { runResearchAgent } from "../../../agents/research.js";
+import { runResearchAgent } from "../agents/research.js";
 
 export const researchRoutes = new Hono();
 

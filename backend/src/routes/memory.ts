@@ -13,7 +13,7 @@ export const memoryRoutes = new Hono();
 function getClient(): MemoryClient | null {
   const key = process.env.MEM0_API_KEY;
   if (!key) return null;
-  return new MemoryClient({ api_key: key });
+  return new MemoryClient({ apiKey: key });
 }
 
 memoryRoutes.get("/", async (c) => {

@@ -5,7 +5,7 @@
 
 import { Hono } from "hono";
 import { supabase } from "../lib/supabase.js";
-import { decompose } from "../agents/decomposer.js";
+import { decompose, DecomposedTask } from "../agents/decomposer.js";
 
 // ── ORIGINAL ROUTE — /api/decompose ─────────────────────────────────────────
 export const decomposeRoutes = new Hono();
