@@ -28,6 +28,14 @@ export function useAgentStream(): UseAgentStreamResult {
 // useAgentStream — wraps useWebSocket with smooth token buffering + typing indicator.
 // Uses rAF (16ms) to batch token appends and avoid layout thrash.
 // Message status: 'streaming' | 'complete' | 'error'
+//
+// P0 ADDITION: Supabase polling fallback
+//   If WS is silent for >WS_SILENCE_THRESHOLD_MS, we fall back to polling
+//   /api/v1/runs?session_id=X every POLL_INTERVAL_MS to recover any dropped messages.
+//   Deduplication by run_id prevents double-render when WS reconnects.
+//
+// Ponytail: rAF buffer + poll fallback. Upgrade to realtime subscription in P1.
+
 // Ponytail: basic WS + rAF buffer. Add readDataStreamResponse when SSE transport is wired.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useWebSocket } from "./useWebSocket";
@@ -36,22 +44,54 @@ export interface AgentMessage {
   id:      string;
   content: string;
   status:  MessageStatus;
+  run_id?: string; // set from Supabase recovery for dedup
+}
+
 export interface UseAgentStreamReturn {
-  /** Send a prompt to the agent */
-  send:        (content: string) => void;
-  /** Fully assembled messages (complete + in-progress) */
-  messages:    AgentMessage[];
-  /** True while the current response is streaming */
-  isTyping:    boolean;
-  /** WebSocket connection status */
-  wsStatus:    "connecting" | "open" | "closed" | "error";
-  /** Clear message history */
+  send:          (content: string) => void;
+  messages:      AgentMessage[];
+  isTyping:      boolean;
+  wsStatus:      "connecting" | "open" | "closed" | "error";
   clearMessages: () => void;
+  isPolling:     boolean; // true when operating on poll fallback
+}
+
+// ── P0 POLLING CONSTANTS ──────────────────────────────────────────────────────
+const WS_SILENCE_THRESHOLD_MS = 3_000; // WS must be silent this long before poll activates
+const POLL_INTERVAL_MS        = 2_000; // how often to query /api/v1/runs in fallback mode
+
+// Backend route that proxies dispatch7.agent_runs for the frontend
+const RUNS_ENDPOINT = (sid: string) =>
+  `/api/v1/runs?session_id=${encodeURIComponent(sid)}&status=streaming&limit=1`;
+
+// ── SUPABASE RUN ROW (partial) ────────────────────────────────────────────────
+interface RunRow {
+  id:         string;
+  chunk_text: string | null;
+  status:     "streaming" | "complete" | "error";
+  agent_name: string;
+}
+
 export function useAgentStream(sessionId: string): UseAgentStreamReturn {
   const { send: wsSend, messages: rawMessages, status: wsStatus } = useWebSocket(sessionId);
+
+  const [messages,   setMessages]  = useState<AgentMessage[]>([]);
+  const [isTyping,   setIsTyping]  = useState(false);
+  const [isPolling,  setIsPolling] = useState(false);
+
+  // Token buffer for rAF batching — avoids one setState per token
+  const tokenBufRef  = useRef<string>("");
+  const rafRef       = useRef<number | null>(null);
+  const activeIdRef  = useRef<string | null>(null);
+
+  // P0: track last WS activity timestamp and seen run_ids to prevent dedup
+  const lastWsActivityRef = useRef<number>(Date.now());
+  const seenRunIdsRef     = useRef<Set<string>>(new Set());
+  const pollTimerRef      = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── FLUSH BUFFERED TOKENS ─────────────────────────────────────────────────
   const [messages,  setMessages]  = useState<AgentMessage[]>([]);
   const [isTyping,  setIsTyping]  = useState(false);
-  // Token buffer for rAF batching — avoids one setState per token
   const tokenBufRef    = useRef<string>("");
   const rafRef         = useRef<number | null>(null);
   const activeIdRef    = useRef<string | null>(null);
@@ -68,12 +108,17 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
           : m
       )
     );
+  }, []);
+
+  // ── PROCESS WS MESSAGES ───────────────────────────────────────────────────
   // Process raw WS messages as they arrive
   useEffect(() => {
     for (const raw of rawMessages) {
+      // Record WS activity so polling knows WS is alive
+      lastWsActivityRef.current = Date.now();
+
       if (raw.type === "token" && raw.content !== undefined) {
         if (!activeIdRef.current) {
-          // First token of a new response — create message row
           const newId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
           activeIdRef.current = newId;
           setIsTyping(true);
@@ -88,7 +133,6 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
           rafRef.current = requestAnimationFrame(flushTokens);
         }
       } else if (raw.type === "done") {
-        // Ensure any buffered tokens are flushed synchronously before marking complete
         if (rafRef.current !== null) {
           cancelAnimationFrame(rafRef.current);
           rafRef.current = null;
@@ -116,25 +160,93 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
         activeIdRef.current = null;
         setIsTyping(false);
       }
-    // rawMessages grows monotonically — only process newest entries
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawMessages]);
-  // Cleanup pending rAF on unmount
+
+  // ── P0: SUPABASE POLLING FALLBACK ─────────────────────────────────────────
+  // Every POLL_INTERVAL_MS, check if WS has been silent for >WS_SILENCE_THRESHOLD_MS.
+  // If so, query /api/v1/runs to recover any in-flight or completed agent output.
+  // Dedup by run_id to avoid rendering the same content twice when WS reconnects.
+  useEffect(() => {
+    const checkAndPoll = async () => {
+      const silenceMs = Date.now() - lastWsActivityRef.current;
+      const wsSilent  = silenceMs > WS_SILENCE_THRESHOLD_MS;
+
+      setIsPolling(wsSilent);
+
+      if (!wsSilent) return; // WS is active — poll not needed
+
+      try {
+        const res = await fetch(RUNS_ENDPOINT(sessionId));
+        if (!res.ok) return;
+
+        const rows: RunRow[] = await res.json();
+
+        for (const row of rows) {
+          // Skip runs we've already rendered via WS
+          if (seenRunIdsRef.current.has(row.id)) continue;
+          seenRunIdsRef.current.add(row.id);
+
+          const content = row.chunk_text ?? "[No output — agent may still be running]";
+          const status  = row.status === "complete" ? "complete"
+                        : row.status === "error"    ? "error"
+                        : "streaming";
+
+          const recoveredId = `recovered-${row.id}`;
+
+          setMessages((prev) => {
+            // Avoid adding duplicate recovered message
+            if (prev.some((m) => m.run_id === row.id)) return prev;
+            return [
+              ...prev,
+              { id: recoveredId, content, status, run_id: row.id },
+            ];
+          });
+
+          if (status !== "streaming") {
+            setIsTyping(false);
+          }
+        }
+      } catch {
+        // Poll failure is non-fatal — WS will recover or user will reconnect
+      }
+    };
+
+    pollTimerRef.current = setInterval(checkAndPoll, POLL_INTERVAL_MS);
+    return () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    };
+  }, [sessionId]);
+
+  // ── CLEANUP ───────────────────────────────────────────────────────────────
   useEffect(() => () => {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+  }, []);
+
+    // rawMessages grows monotonically — only process newest entries
+  // Cleanup pending rAF on unmount
   const send = useCallback(
     (content: string) => {
+      // Sending resets the WS silence clock
+      lastWsActivityRef.current = Date.now();
       wsSend(content, sessionId);
     },
     [wsSend, sessionId]
   );
   const clearMessages = useCallback(() => {
     setMessages([]);
-    activeIdRef.current  = null;
-    tokenBufRef.current  = "";
+    activeIdRef.current      = null;
+    tokenBufRef.current      = "";
+    seenRunIdsRef.current    = new Set();
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     setIsTyping(false);
+    setIsPolling(false);
+  }, []);
+
+  return { send, messages, isTyping, wsStatus, clearMessages, isPolling };
   return { send, messages, isTyping, wsStatus, clearMessages };
 }
