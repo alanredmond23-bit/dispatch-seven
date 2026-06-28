@@ -5,6 +5,7 @@
 
 import { inngest } from "../lib/inngest.js";
 import { supabase } from "../lib/supabase.js";
+import { dagRunnerFunction } from "../lib/dag-executor.js";
 
 // ── 1. agentTrigger ──────────────────────────────────────────────────────────
 // Fires on "dispatch/agent.trigger" — inserts a pending run row, returns run_id
@@ -142,5 +143,8 @@ export const scheduledSweep = inngest.createFunction(
   }
 );
 
+
+// ── dagRunnerFunction — fires on "dispatch/dag.run" ─────────────────────
+
 // Export all functions for the Inngest serve handler
-export const inngestFunctions = [agentTrigger, webhookProcessor, scheduledSweep];
+export const inngestFunctions = [agentTrigger, webhookProcessor, scheduledSweep, dagRunnerFunction];
