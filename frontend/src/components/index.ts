@@ -1,0 +1,23 @@
+// Central barrel export for all D7 UI components
+export { ActionBar } from './ActionBar';
+export { ActionsPanel } from './ActionsPanel';
+export { AgentDashboard } from './AgentDashboard';
+export { CitationBlock } from './CitationBlock';
+export { ConnectionBadge } from './ConnectionBadge';
+export { CopilotActions } from './CopilotActions';
+export { CostBadge } from './CostBadge';
+export { CostBar } from './CostBar';
+export { CostMeter } from './CostMeter';
+export { DagView } from './DagView';
+export { DarkModeToggle } from './DarkModeToggle';
+export { EventLog } from './EventLog';
+export { JobQueue } from './JobQueue';
+export { MemoryViewer } from './MemoryViewer';
+export { ResearchPanel } from './ResearchPanel';
+export { RouteBadge } from './RouteBadge';
+export { SchedulerPanel } from './SchedulerPanel';
+export { SetupWizard } from './SetupWizard';
+export { TaskBoard } from './TaskBoard';
+export { TaskGraph } from './TaskGraph';
+export { TaskQueue } from './TaskQueue';
+export { TypingIndicator } from './TypingIndicator';

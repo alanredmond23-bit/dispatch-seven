@@ -18,12 +18,14 @@ import { inngestRoutes } from "./routes/inngest.js";   // S3: Inngest event endp
 import { copilotRoutes } from "./routes/copilot.js";   // S3: CopilotKit runtime
 import { jobRoutes } from "./routes/jobs.js";          // T9: Inngest job queue API
 import { sessionRoutes } from "./routes/sessions.js";  // T10: active session listing
+import { budgetGuard } from "./middleware/budget-guard.js"; // PR32: per-session spend cap
 
 const app = new Hono();
 
 // Middleware
 app.use("*", logger());
 app.use("*", cors());
+app.use("/api/*", budgetGuard); // PR32: 402 when session exceeds budget_usd
 
 // Health check
 app.get("/health", (c) =>
