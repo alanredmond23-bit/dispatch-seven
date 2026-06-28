@@ -21,6 +21,7 @@ import { supabase } from "../lib/supabase.js";
 import { extractCitations, verifyCitation } from "../lib/citation-extractor.js";
 import { LEGAL_SYSTEM } from "../../../agents/legal.js";
 import { parseAndInsertActions } from "../middleware/actions-parser.js";
+import { budgetOverrides } from "../lib/session-store.js";
 
 const ANTHROPIC_URL    = "https://api.anthropic.com/v1/messages";
 const PING_INTERVAL_MS = 30_000;
@@ -52,7 +53,8 @@ async function checkBudget(sessionId: string): Promise<void> {
     0
   );
 
-  if (totalSpend >= BUDGET_CAP_USD) {
+  // If user clicked "Continue anyway", allow overage for this session
+  if (totalSpend >= BUDGET_CAP_USD && !budgetOverrides.has(sessionId)) {
     throw new BudgetCapError(totalSpend);
   }
 }

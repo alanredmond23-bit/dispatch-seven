@@ -1,11 +1,16 @@
 // runs.ts — agent_runs cost dashboard routes
-// GET  /api/v1/runs?session_id=X  — last 50 runs for session (omit param = all)
-// GET  /api/v1/runs/summary       — total cost_usd by agent, last 30 days
-// POST /api/v1/runs/track         — frontend reports usage after a Claude API call
+// GET  /api/v1/runs?session_id=X          — last 50 runs for session (omit = all)
+// GET  /api/v1/runs/summary?session_id=X  — session + daily cost summary for CostBar
+// POST /api/v1/runs/track                 — frontend reports usage after a Claude call
+// POST /api/v1/runs/override-budget       — sets budget override flag for session
+// GET  /api/v1/runs/task-graph            — session task graph for TaskGraph component
 
 import { Hono } from "hono";
 import { supabase } from "../lib/supabase.js";
 import { trackRun } from "../lib/cost-tracker.js";
+import { budgetOverrides } from "../lib/session-store.js";
+
+const BUDGET_CAP_USD = parseFloat(process.env.BUDGET_CAP_USD ?? "1.00");
 
 export const runsRoutes = new Hono();
 
@@ -19,7 +24,6 @@ runsRoutes.get("/", async (c) => {
     .order("started_at", { ascending: false })
     .limit(50);
 
-  // Filter by session if provided; otherwise return latest 50 across all sessions
   if (session_id) query = query.eq("session_id", session_id);
 
   const { data, error } = await query;
@@ -27,39 +31,71 @@ runsRoutes.get("/", async (c) => {
   return c.json({ runs: data ?? [], count: data?.length ?? 0 });
 });
 
-// GET /api/v1/runs/summary — 30-day cost rollup by agent
-// Note: mounted BEFORE "/:id" so the literal "summary" is matched first
+// GET /api/v1/runs/summary?session_id=X
+// Returns CostBar payload: session totals, budget %, per-agent breakdown, daily total.
+// Mounted BEFORE /:id so the literal "summary" is matched first.
 runsRoutes.get("/summary", async (c) => {
-  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const session_id = c.req.query("session_id");
 
-  const { data, error } = await supabase
-    .from("agent_runs")
-    .select("agent, cost_usd, tokens_in, tokens_out")
-    .gte("started_at", since)
-    .eq("status", "done");
+  // Start of today UTC — for daily rollup
+  const todayStart = new Date();
+  todayStart.setUTCHours(0, 0, 0, 0);
 
-  if (error) return c.json({ error: error.message }, 500);
+  // Parallel: session runs + today's runs across all sessions
+  const [sessionResult, dailyResult] = await Promise.all([
+    session_id
+      ? supabase
+          .from("agent_runs")
+          .select("agent, cost_usd")
+          .eq("session_id", session_id)
+      : Promise.resolve({ data: [] as Array<{ agent: string; cost_usd: number | null }>, error: null }),
+    supabase
+      .from("agent_runs")
+      .select("cost_usd")
+      .gte("started_at", todayStart.toISOString()),
+  ]);
 
-  // Ponytail: aggregate in JS — avoids an RPC for this data volume
-  const byAgent: Record<string, { cost_usd: number; runs: number; tokens_in: number; tokens_out: number }> = {};
-  let total_cost_usd = 0;
+  if (sessionResult.error) return c.json({ error: sessionResult.error.message }, 500);
+  if (dailyResult.error)   return c.json({ error: dailyResult.error.message }, 500);
 
-  for (const row of data ?? []) {
+  // Aggregate session cost by agent
+  const byAgentMap: Record<string, { cost_usd: number; run_count: number }> = {};
+  let session_total_usd = 0;
+
+  for (const row of sessionResult.data ?? []) {
     const key = row.agent as string;
-    if (!byAgent[key]) byAgent[key] = { cost_usd: 0, runs: 0, tokens_in: 0, tokens_out: 0 };
+    if (!byAgentMap[key]) byAgentMap[key] = { cost_usd: 0, run_count: 0 };
     const cost = Number(row.cost_usd ?? 0);
-    byAgent[key].cost_usd   += cost;
-    byAgent[key].runs       += 1;
-    byAgent[key].tokens_in  += row.tokens_in  ?? 0;
-    byAgent[key].tokens_out += row.tokens_out ?? 0;
-    total_cost_usd          += cost;
+    byAgentMap[key].cost_usd  += cost;
+    byAgentMap[key].run_count += 1;
+    session_total_usd         += cost;
   }
 
-  return c.json({ period_days: 30, total_cost_usd, by_agent: byAgent });
+  const by_agent = Object.entries(byAgentMap).map(([agent, v]) => ({
+    agent,
+    cost_usd:  v.cost_usd,
+    run_count: v.run_count,
+  }));
+
+  const daily_total_usd = (dailyResult.data ?? []).reduce(
+    (sum, r) => sum + Number(r.cost_usd ?? 0),
+    0
+  );
+
+  const budget_pct = BUDGET_CAP_USD > 0
+    ? Math.min(100, (session_total_usd / BUDGET_CAP_USD) * 100)
+    : 0;
+
+  return c.json({
+    session_total_usd,
+    budget_cap_usd:  BUDGET_CAP_USD,
+    budget_pct,
+    by_agent,
+    daily_total_usd,
+  });
 });
 
 // POST /api/v1/runs/track — frontend reports usage synchronously after a Claude call
-// Body: { session_id?, agent, model?, task_id?, project_id?, usage: {input_tokens, output_tokens, cache_read_input_tokens?}, tool_calls? }
 runsRoutes.post("/track", async (c) => {
   const body = await c.req.json() as {
     session_id?: string;
@@ -74,7 +110,6 @@ runsRoutes.post("/track", async (c) => {
   const { agent, usage } = body;
   if (!agent || !usage) return c.json({ error: "agent and usage are required" }, 400);
 
-  // start() + finish() in one shot — we already have the usage data
   const tracker = trackRun({
     session_id:  body.session_id,
     agent,
@@ -87,4 +122,44 @@ runsRoutes.post("/track", async (c) => {
   await tracker.finish(runId, usage, body.tool_calls ?? []);
 
   return c.json({ id: runId, ok: true });
+});
+
+// POST /api/v1/runs/override-budget
+// Body: { session_id: string }
+// Sets in-memory override so ws.ts budget check allows overage for this session.
+runsRoutes.post("/override-budget", async (c) => {
+  const body = await c.req.json<{ session_id: string }>();
+  if (!body?.session_id) return c.json({ error: "session_id required" }, 400);
+  budgetOverrides.add(body.session_id);
+  return c.json({ ok: true, session_id: body.session_id, overridden: true });
+});
+
+// GET /api/v1/runs/task-graph?session_id=X
+// Returns all tasks for session from dispatch7 — used by TaskGraph component (3s poll).
+// Tasks are stored with payload->>'session_id' set at decompose time.
+runsRoutes.get("/task-graph", async (c) => {
+  const session_id = c.req.query("session_id");
+  if (!session_id) return c.json({ tasks: [] });
+
+  // Query tasks where payload contains our session_id
+  // Supabase PostgREST JSON filter: payload->>'session_id' = X
+  const { data: tasks, error } = await supabase
+    .from("tasks")
+    .select("id, title, agent, status, payload, created_at")
+    .filter("payload->>session_id", "eq", session_id)
+    .order("created_at", { ascending: true });
+
+  if (error) return c.json({ error: error.message }, 500);
+
+  // Reshape for the frontend: pull estimated_cost_usd and dependencies from payload
+  const shaped = (tasks ?? []).map((t) => ({
+    id:                 t.id,
+    title:              t.title,
+    agent:              t.agent,
+    status:             t.status,
+    estimated_cost_usd: t.payload?.estimated_cost_usd ?? null,
+    dependencies:       t.payload?.dependencies ?? [],
+  }));
+
+  return c.json({ tasks: shaped });
 });
