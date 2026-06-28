@@ -228,6 +228,21 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
         const agentLabel = agentFromMsg ?? (legal ? "LEGAL" : "ORCHESTRATOR");
         console.log(`[WS] message session=${sid} len=${userMessage.length} agent=${agentLabel}`);
 
+        // ── P0: TASK STATUS — write 'running' to dispatch7.tasks ───────────
+        // taskId is stable per WS turn: session + timestamp
+        const taskId      = `task-${sid}-${Date.now()}`;
+        const taskStarted = new Date().toISOString();
+        writeTaskStatus({
+          task_id:      taskId,
+          session_id:   sid,
+          title:        userMessage.slice(0, 80) + (userMessage.length > 80 ? "…" : ""),
+          status:       "running",
+          progress_pct: 5,
+          agent_name:   agentLabel,
+          cost_usd:     0,
+          started_at:   taskStarted,
+        }).catch(console.error); // fire-and-forget — never block WS
+
         // --- Mem0: fetch relevant context from prior sessions ---
         let systemPrompt: string | undefined;
         try {
@@ -324,6 +339,20 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
           // Cost tracking — fire-and-forget so WS response isn't delayed
           if (runId) tracker.finish(runId, usage).catch(console.error);
 
+          // ── P0: TASK STATUS — mark done with final cost ─────────────────
+          const { calculateCost: calcCostDone } = await import("../lib/cost-tracker.js");
+          const finalCost = calcCostDone("claude-sonnet-4-6", usage.input_tokens, usage.output_tokens);
+          writeTaskStatus({
+            task_id:      taskId,
+            session_id:   sid,
+            title:        userMessage.slice(0, 80) + (userMessage.length > 80 ? "…" : ""),
+            status:       "done",
+            progress_pct: 100,
+            agent_name:   agentLabel,
+            cost_usd:     finalCost,
+            started_at:   taskStarted,
+          }).catch(console.error);
+
           // ── LANGFUSE: trace + span + cost score ─────────────────────────
           // Wrapped in try/catch — Langfuse down must not affect WS handler
           const { calculateCost } = await import("../lib/cost-tracker.js");
@@ -360,6 +389,19 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
           const message = err instanceof Error ? err.message : String(err);
           console.error(`[WS] stream error session=${sid}:`, message);
           ws.send(JSON.stringify({ type: "error", message }));
+
+          // ── P0: TASK STATUS — mark failed ───────────────────────────────
+          writeTaskStatus({
+            task_id:      taskId,
+            session_id:   sid,
+            title:        userMessage.slice(0, 80) + (userMessage.length > 80 ? "…" : ""),
+            status:       "failed",
+            progress_pct: 0,
+            agent_name:   agentLabel,
+            cost_usd:     0,
+            started_at:   taskStarted,
+            error:        message,
+          }).catch(console.error);
         }
       },
 
@@ -376,4 +418,74 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
       },
     };
   });
+}
+
+// ── P0: TASK STATUS WRITER ────────────────────────────────────────────────────
+// writeTaskStatus() upserts a row in dispatch7.tasks so the TaskBoard component
+// can display real-time progress for every agent run.
+//
+// Called three times per WS turn:
+//   1. onMessage received → status: 'running'
+//   2. stream complete    → status: 'done'
+//   3. error thrown       → status: 'failed'
+//
+// task_id is derived from session_id + timestamp so it's unique per turn.
+// The TaskBoard polls /api/v1/tasks?session_id=X and renders these rows.
+//
+// Ponytail: fire-and-forget — Supabase down must not affect WS response latency.
+// Schema note: tasks table in dispatch7 uses assigned_agent, not agent_name.
+
+export interface TaskStatusPayload {
+  task_id:      string;
+  session_id:   string;
+  title:        string;
+  status:       "queued" | "running" | "done" | "failed";
+  progress_pct: number;
+  agent_name:   string;
+  cost_usd:     number;
+  started_at?:  string; // ISO — set on first write
+  error?:       string; // set on failure
+}
+
+/**
+ * writeTaskStatus — upsert a task progress row into dispatch7.tasks.
+ * Fire-and-forget: caller should .catch(console.error) and not await.
+ */
+export async function writeTaskStatus(payload: TaskStatusPayload): Promise<void> {
+  const {
+    task_id, session_id, title, status, progress_pct,
+    agent_name, cost_usd, started_at, error,
+  } = payload;
+
+  // Map to tasks table schema (assigned_agent = agent_name, metadata carries the rest)
+  const { error: dbErr } = await supabase
+    .from("tasks")
+    .upsert(
+      {
+        id:             task_id,
+        title,
+        status:         status === "running" ? "in_progress"
+                      : status === "done"    ? "completed"
+                      : status,              // 'queued' | 'failed' map directly
+        assigned_agent: agent_name,
+        metadata: {
+          session_id,
+          progress_pct,
+          cost_usd,
+          agent_name,
+          started_at:    started_at ?? new Date().toISOString(),
+          completed_at:  (status === "done" || status === "failed")
+                           ? new Date().toISOString()
+                           : null,
+          error:         error ?? null,
+        },
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id" }
+    );
+
+  if (dbErr) {
+    // Non-fatal — log and continue. WS response is not blocked.
+    console.warn(`[writeTaskStatus] upsert failed task_id=${task_id}: ${dbErr.message}`);
+  }
 }
