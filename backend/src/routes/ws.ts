@@ -20,6 +20,7 @@ import { traceRun } from "../lib/langfuse.js";
 import { supabase } from "../lib/supabase.js";
 import { extractCitations, verifyCitation } from "../lib/citation-extractor.js";
 import { parseAndInsertActions } from "../middleware/actions-parser.js";
+import { parseSchedulerOutput, upsertScheduledTasks } from "../lib/scheduler-runner.js";
 import { classifyMessage } from "../lib/classifier.js";
 import { loadAgent } from "../lib/agent-loader.js";
 import { budgetOverrides } from "../lib/session-store.js";
@@ -302,6 +303,17 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
           } catch (actErr) {
             console.error("[actions-parser] non-fatal:", actErr);
           }
+          // T11: SCHEDULER upsert — if SCHEDULER agent handled this turn, persist tasks
+          if (domain === "SCHEDULER" && fullResponse) {
+            try {
+              const schedParsed = parseSchedulerOutput(fullResponse);
+              if (schedParsed && schedParsed.tasks.length > 0) {
+                await upsertScheduledTasks(schedParsed, sid);
+              }
+            } catch (schedErr) {
+              console.error("[scheduler-runner] non-fatal:", schedErr);
+            }
+          }
 
           // Detect orchestrator routing JSON { "agent": "...", "task": "...", "priority": "..." }
           // and emit a spawn_task action so agent routing is visible in the ActionsPanel.
@@ -370,7 +382,7 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
               outputTokens: usage.output_tokens,
               spanStart,
               spanEnd,
-              isLegal:      legal,
+              isLegal:      domain === "LEGAL",
             },
           }).catch(console.error); // truly fire-and-forget
 
