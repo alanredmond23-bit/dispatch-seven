@@ -1,16 +1,21 @@
-// agent-loader.ts — loads agent config (system prompt + model) by domain
+// agent-loader.ts — loads agent config (system prompt + model + provider) by domain
 // Reads SYSTEM_PROMPT export from /agents/{domain}.ts; falls back to safe default
+// Provider resolution: agent override → settings default → env var → 'anthropic'
 // Ponytail: readFileSync at startup is fine — these files are tiny and local
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import type { AgentDomain } from './classifier.js';
+import { getProviderClient, type Provider, type ProviderConfig } from './provider.js';
+import { resolveProvider, DEFAULT_SETTINGS, type D7Settings } from './settings.js';
 
 export interface AgentConfig {
   name: AgentDomain;
   systemPrompt: string;
   model: string;
   maxTokens: number;
+  provider: Provider;
+  providerConfig: ProviderConfig;
 }
 
 const MODEL_MAP: Record<AgentDomain, string> = {
@@ -30,7 +35,10 @@ const PROMPT_EXPORT_MAP: Record<AgentDomain, string> = {
   ORCHESTRATOR: 'ORCHESTRATOR_SYSTEM',
 };
 
-export function loadAgent(domain: AgentDomain): AgentConfig {
+export function loadAgent(
+  domain: AgentDomain,
+  settings: D7Settings = DEFAULT_SETTINGS,
+): AgentConfig {
   // Resolve agents/ relative to project root (two levels up from backend/src/lib/)
   const agentsDir = join(__dirname, '..', '..', '..', '..', 'agents');
   const agentPath = join(agentsDir, `${domain.toLowerCase()}.ts`);
@@ -41,17 +49,25 @@ export function loadAgent(domain: AgentDomain): AgentConfig {
   try {
     const src = readFileSync(agentPath, 'utf-8');
     // Match: export const LEGAL_SYSTEM = `...` or similar
-    const pattern = new RegExp(`${exportName}\\s*=\\s*\`([^\`]+)\``, 's');
+    const pattern = new RegExp(`${exportName}\\s*=\\s*\\`([^\\`]+)\\``, 's');
     const match = src.match(pattern);
     if (match) systemPrompt = match[1].trim();
   } catch {
     // Agent file not found or unreadable — default prompt stands
   }
 
+  // Resolve provider: agent override → settings default → env var → 'anthropic'
+  const provider = resolveProvider(domain, settings);
+  // Model: per-agent override in settings → hard-coded MODEL_MAP
+  const model = settings.agentModelOverrides[domain] ?? MODEL_MAP[domain];
+  const providerConfig = getProviderClient(provider, model);
+
   return {
     name: domain,
     systemPrompt,
-    model: MODEL_MAP[domain],
+    model,
     maxTokens: domain === 'SCHEDULER' ? 1024 : 4096,
+    provider,
+    providerConfig,
   };
 }
