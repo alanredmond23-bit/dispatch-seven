@@ -1,22 +1,14 @@
 name: Deploy to Railway
-
+# DISABLED — primary deployment is ACA (aca-deploy.yml)
+# Re-enable by removing the 'if: false' condition and adding RAILWAY_TOKEN secret
 on:
   push:
-    branches:
-      - main
-
+    branches: [main]
 jobs:
   deploy:
+    if: false
     name: Railway Deploy
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy to Railway
-        run: railway up --detach
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      - uses: actions/checkout@v4
+      - run: echo "Railway deployment disabled — using ACA"
