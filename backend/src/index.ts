@@ -7,6 +7,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { cors } from "hono/cors";
+import { serve as inngestServe } from "inngest/hono";
 import { agentRoutes } from "./routes/agents.js";
 import taskRoutes from "./routes/tasks.js";
 import { memoryRoutes } from "./routes/memory.js";
@@ -15,11 +16,17 @@ import { actionRoutes } from "./routes/actions.js";
 // import { decomposeRoutes, v1DecomposeRoutes } from "./routes/decompose.js";
 import { buildWsHandler } from "./routes/ws.js";
 import { runsRoutes } from "./routes/runs.js";
-import { inngestRoutes } from "./routes/inngest.js";   // S3: Inngest event endpoint
 import { copilotRoutes } from "./routes/copilot.js";   // S3: CopilotKit runtime
 import { jobRoutes } from "./routes/jobs.js";          // T9: Inngest job queue API
 import { sessionRoutes } from "./routes/sessions.js";  // T10: active session listing
 import { budgetGuard } from "./middleware/budget-guard.js"; // PR32: per-session spend cap
+
+// Inngest — client + all registered functions
+import { inngest } from "./lib/inngest.js";
+import { researchJob } from "./inngest/researchJob.js";
+import { summaryJob } from "./inngest/summaryJob.js";
+import { deadlineSweep } from "./inngest/deadlineSweep.js";
+import { inngestFunctions } from "./inngest/functions.js";
 
 const app = new Hono();
 
@@ -38,13 +45,32 @@ app.route("/api/v1/agents", agentRoutes);
 app.route("/api/v1/tasks", taskRoutes);
 app.route("/api/v1/memory", memoryRoutes);
 app.route("/api/v1/actions", actionRoutes);
-// app.route("/api/decompose", decomposeRoutes);  // disabled: broken import      // original project DAG decomposer
-// app.route("/api/v1/decompose", v1DecomposeRoutes);  // disabled: broken import // T4: session-scoped Haiku pre-planner
+// app.route("/api/decompose", decomposeRoutes);  // disabled: broken import
+// app.route("/api/v1/decompose", v1DecomposeRoutes);  // disabled: broken import
 app.route("/api/v1/runs", runsRoutes);             // cost dashboard + usage tracking + task-graph
-app.route("/api/inngest", inngestRoutes);           // S3: Inngest webhook (event delivery)
-app.route("/api/copilot", copilotRoutes);           // S3: CopilotKit action runtime
-app.route("/api/v1/jobs", jobRoutes);                  // T9: job trigger + status
-app.route("/api/v1/sessions", sessionRoutes);          // T10: session list + message feed
+app.route("/api/copilot", copilotRoutes);          // S3: CopilotKit action runtime
+app.route("/api/v1/jobs", jobRoutes);              // T9: job trigger + status
+app.route("/api/v1/sessions", sessionRoutes);      // T10: session list + message feed
+
+// Inngest serve handler — canonical Hono adapter pattern
+// GET: introspection by Inngest Cloud
+// PUT: function registration sync
+// POST: event delivery
+// signingKey validates requests from Inngest Cloud (set INNGEST_SIGNING_KEY in env)
+app.on(
+  ["GET", "PUT", "POST"],
+  "/api/inngest",
+  inngestServe({
+    client: inngest,
+    functions: [
+      researchJob,
+      summaryJob,
+      deadlineSweep,
+      ...inngestFunctions,  // agentTrigger, webhookProcessor, scheduledSweep, five9IndexJob, voyageBackfillJob
+    ],
+    signingKey: process.env.INNGEST_SIGNING_KEY,
+  })
+);
 
 // WebSocket — must init before serve() so injectWebSocket can attach to the server
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
