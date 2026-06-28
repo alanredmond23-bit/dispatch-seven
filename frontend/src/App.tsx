@@ -10,6 +10,7 @@ import { useAgentStream } from "./hooks/useAgentStream";
 import { generateScheduleViaWs } from "./lib/wsSchedule";
 import CitationBlock, { parseMessageCitations } from "./components/CitationBlock";
 import { DesignSystem } from "./pages/DesignSystem";
+import Dashboard from "./pages/Dashboard";  // T10: multi-panel agent dashboard
 import "./index.css";
 
 import ActionsPanel from "./components/ActionsPanel";
@@ -665,6 +666,11 @@ function BottomNav({ tab, setTab, p0Count }) {
 
 // ── ROOT APP ─────────────────────────────────────────────────────────────────
 export default function App() {
+
+  // /dashboard — agent session dashboard (production + dev)
+  if (typeof window !== "undefined" && window.location.pathname === "/dashboard") {
+    return <Dashboard />;
+  }
 
   // DEV-only: route /design to design system preview
   if (import.meta.env.DEV && typeof window !== "undefined" && window.location.pathname === "/design") {

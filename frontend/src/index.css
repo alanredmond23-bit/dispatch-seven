@@ -92,3 +92,13 @@ body {
   height: 56px;
   border-bottom: 1px solid var(--border);
 }
+
+/* ── T10: Dashboard breakpoint helpers ──────────────────────────────────────── */
+/* Mobile-first: show mobile layout by default, hide desktop */
+.d7-mobile-only  { display: block; }
+.d7-desktop-only { display: none !important; }
+
+@media (min-width: 768px) {
+  .d7-mobile-only  { display: none !important; }
+  .d7-desktop-only { display: grid !important; }
+}
