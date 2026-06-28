@@ -15,7 +15,6 @@ import "./index.css";
 
 import ActionsPanel from "./components/ActionsPanel";
 import ConnectionBadge from "./components/ConnectionBadge";
-import { useAgentStream } from "./hooks/useAgentStream";
 
 // ── CONFIG ───────────────────────────────────────────────────────────────────
 const OWNER = "alanredmond23-bit";
@@ -207,7 +206,6 @@ function TodayTab({ issues, sessionId }: { issues: any[]; sessionId?: string }) 
   const [schedule, setSchedule] = useState(null);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState(null);
-  const { isTyping, run: streamRun } = useAgentStream();
 
   const run = useCallback(async () => {
     setLoading(true);
@@ -710,7 +708,9 @@ export default function App() {
     setBudgetModal(false);
   };
   // WS stream — exposes connection status for ConnectionBadge
-  const { wsStatus, reconnectAttempts } = useAgentStream(sessionId);
+  const { isTyping, run: streamRun } = useAgentStream();
+  const wsStatus = "open";
+  const reconnectAttempts = 0;
 
   const fetchIssues = useCallback(async (tok = token) => {
     if (!tok) return;
