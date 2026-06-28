@@ -65,22 +65,3 @@ jobs:
           tags: |
             ghcr.io/alanredmond23-bit/dispatch-seven:latest
             ghcr.io/alanredmond23-bit/dispatch-seven:${{ github.sha }}
-
-  # ── Main push: deploy to Railway ──────────────────────────────────────────
-  railway:
-    name: Deploy to Railway
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [docker]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy
-        run: railway up --detach
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
