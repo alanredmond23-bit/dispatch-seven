@@ -3,8 +3,15 @@ import TaskGraph from "./components/TaskGraph";
 import type { GraphTask } from "./components/TaskGraph";
 import { useDecompose } from "./hooks/useDecompose";
 import { useState, useEffect, useCallback, useRef } from "react";
+import DarkModeToggle from "./components/DarkModeToggle";
+import SetupWizard from "./components/SetupWizard";
+import TypingIndicator from "./components/TypingIndicator";
+import { useAgentStream } from "./hooks/useAgentStream";
 import { generateScheduleViaWs } from "./lib/wsSchedule";
 import CitationBlock, { parseMessageCitations } from "./components/CitationBlock";
+import ActionsPanel from "./components/ActionsPanel";
+import ConnectionBadge from "./components/ConnectionBadge";
+import { useAgentStream } from "./hooks/useAgentStream";
 
 // ── CONFIG ───────────────────────────────────────────────────────────────────
 const OWNER = "alanredmond23-bit";
@@ -196,6 +203,7 @@ function TodayTab({ issues, sessionId }: { issues: any[]; sessionId?: string }) 
   const [schedule, setSchedule] = useState(null);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState(null);
+  const { isTyping, run: streamRun } = useAgentStream();
 
   const run = useCallback(async () => {
     setLoading(true);
@@ -274,6 +282,8 @@ function TodayTab({ issues, sessionId }: { issues: any[]; sessionId?: string }) 
           </div>
         </div>
       ))}
+
+      <TypingIndicator visible={isTyping || loading} />
 
       {!loading && schedule?.length === 0 && (
         <div style={{ ...css.card, fontFamily:T.mono, fontSize:"11px", color:T.muted }}>
@@ -581,6 +591,7 @@ function DeadlinesTab() {
 
 // ── HEADER ────────────────────────────────────────────────────────────────────
 function Header({ issueCount, trialDays, onRefresh, loading, sessionId, dailyTotal }) {
+function Header({ issueCount, trialDays, onRefresh, loading, sessionId, wsStatus = "open", reconnectAttempts = 0 }) {
   return (
     <div style={{ background:T.bg, borderBottom:`1px solid ${T.border}`, padding:"12px 16px", display:"flex", justifyContent:"space-between", alignItems:"center", position:"sticky", top:0, zIndex:10 }}>
       <div style={{ display:"flex", alignItems:"center", gap:"10px" }}>
@@ -593,12 +604,14 @@ function Header({ issueCount, trialDays, onRefresh, loading, sessionId, dailyTot
         )}
       </div>
       <div style={{ display:"flex", alignItems:"center", gap:"12px" }}>
+        <DarkModeToggle />
         <CostBadge sessionId={sessionId} />
         {dailyTotal != null && (
           <span style={{ fontFamily:T.mono, fontSize:"9px", color:T.muted, letterSpacing:"0.08em", whiteSpace:"nowrap" }}>
             Today: ${dailyTotal.toFixed(2)}
           </span>
         )}
+        <ConnectionBadge status={wsStatus} attempts={reconnectAttempts} />
         <span style={{ fontFamily:T.mono, fontSize:"11px", color: trialDays <= 30 ? "#dc2626" : T.muted, letterSpacing:"0.1em" }}>
           {trialDays}d
         </span>
@@ -682,6 +695,8 @@ export default function App() {
     } catch { /* non-critical */ }
     setBudgetModal(false);
   };
+  // WS stream — exposes connection status for ConnectionBadge
+  const { wsStatus, reconnectAttempts } = useAgentStream(sessionId);
 
   const fetchIssues = useCallback(async (tok = token) => {
     if (!tok) return;
@@ -754,12 +769,16 @@ export default function App() {
           </div>
         </div>
       )}
+      <Header issueCount={issues.length} trialDays={trialDays} onRefresh={() => fetchIssues()} loading={loading} sessionId={sessionId} wsStatus={wsStatus} reconnectAttempts={reconnectAttempts} />
+      <SetupWizard />
+      <Header issueCount={issues.length} trialDays={trialDays} onRefresh={() => fetchIssues()} loading={loading} sessionId={sessionId} />
 
       {tab === "today"     && <TodayTab     issues={issues} sessionId={sessionId} />}
       {tab === "board"     && <BoardTab     issues={issues} onDone={markDone} loading={loading} />}
       {tab === "capture"   && <CaptureTab   token={token}   onCreated={fetchIssues} sessionId={sessionId} onDecompose={setGraphTasks} />}
       {tab === "deadlines" && <DeadlinesTab />}
 
+      <ActionsPanel sessionId={sessionId} />
       <BottomNav tab={tab} setTab={setTab} p0Count={p0Count} />
     </div>
   );

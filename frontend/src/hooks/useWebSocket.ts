@@ -27,12 +27,13 @@ export interface UseWebSocketReturn {
   messages: WsMessage[];
   /** Current connection status */
   status: WsStatus;
+  /** Number of reconnect attempts since last successful open (resets on open) */
+  reconnectAttempts: number;
 }
 
 // Build the WS URL from VITE_WS_URL or fall back to current host
 function resolveWsUrl(sessionId: string): string {
   const base =
-    // Vite injects env vars at build time
     (typeof import.meta !== "undefined" && (import.meta as Record<string, unknown>).env
       ? ((import.meta as { env: Record<string, string> }).env.VITE_WS_URL ?? "")
       : "");
@@ -40,12 +41,10 @@ function resolveWsUrl(sessionId: string): string {
   if (base) {
     const url = new URL("/ws", base);
     url.searchParams.set("session_id", sessionId);
-    // wss:// in production, ws:// in dev
     url.protocol = base.startsWith("https") ? "wss:" : "ws:";
     return url.toString();
   }
 
-  // Fallback: derive from current page origin
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}/ws?session_id=${encodeURIComponent(sessionId)}`;
 }
@@ -53,14 +52,20 @@ function resolveWsUrl(sessionId: string): string {
 const BASE_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS  = 30_000;
 
-export function useWebSocket(sessionId: string): UseWebSocketReturn {
-  const [status,   setStatus]   = useState<WsStatus>("connecting");
-  const [messages, setMessages] = useState<WsMessage[]>([]);
+export function useWebSocket(
+  sessionId: string,
+  onReconnecting?: (attempt: number) => void,
+): UseWebSocketReturn {
+  const [status,            setStatus]            = useState<WsStatus>("connecting");
+  const [messages,          setMessages]          = useState<WsMessage[]>([]);
+  const [reconnectAttempts, setReconnectAttempts] = useState(0);
 
   const wsRef      = useRef<WebSocket | null>(null);
   const attemptRef = useRef(0);
   const timerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const deadRef    = useRef(false);   // set true on unmount to stop reconnect
+  const deadRef    = useRef(false);          // set true on unmount to stop reconnect
+  const onReconnRef = useRef(onReconnecting); // stable ref so connect() closure is stable
+  useEffect(() => { onReconnRef.current = onReconnecting; }, [onReconnecting]);
 
   const connect = useCallback(() => {
     if (deadRef.current) return;
@@ -71,7 +76,8 @@ export function useWebSocket(sessionId: string): UseWebSocketReturn {
     setStatus("connecting");
 
     ws.onopen = () => {
-      attemptRef.current = 0;           // reset backoff on successful connect
+      attemptRef.current = 0;
+      setReconnectAttempts(0);
       setStatus("open");
     };
 
@@ -105,7 +111,9 @@ export function useWebSocket(sessionId: string): UseWebSocketReturn {
 
       // Exponential backoff reconnect
       const attempt = ++attemptRef.current;
-      const delay   = Math.min(BASE_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS);
+      setReconnectAttempts(attempt);
+      onReconnRef.current?.(attempt);
+      const delay = Math.min(BASE_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS);
       console.log(`[WS] reconnect attempt ${attempt} in ${delay}ms`);
       timerRef.current = setTimeout(connect, delay);
     };
@@ -140,5 +148,5 @@ export function useWebSocket(sessionId: string): UseWebSocketReturn {
     [sessionId]
   );
 
-  return { send, messages, status };
+  return { send, messages, status, reconnectAttempts };
 }
