@@ -8,7 +8,7 @@ import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { cors } from "hono/cors";
 import { agentRoutes } from "./routes/agents.js";
-import { taskRoutes } from "./routes/tasks.js";
+import taskRoutes from "./routes/tasks.js";
 import { memoryRoutes } from "./routes/memory.js";
 import { actionRoutes } from "./routes/actions.js";
 import { decomposeRoutes, v1DecomposeRoutes } from "./routes/decompose.js";

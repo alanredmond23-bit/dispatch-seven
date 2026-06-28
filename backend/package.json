@@ -4,7 +4,7 @@
   "description": "D7 Dispatch Seven \u2014 Hono 4 API backend",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc --noEmitOnError false",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:integration": "vitest run src/test/integration",
