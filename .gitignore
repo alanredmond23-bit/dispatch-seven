@@ -141,3 +141,10 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Python dispatcher artifacts - never commit
+.env
+.venv/
+*.pyc
+__pycache__/
+dispatcher.db

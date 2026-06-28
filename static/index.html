@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Fleet Dispatcher</title>
+<style>
+  :root{
+    --bg:#EDE6D7; --surface:#F6F0E5; --raise:#FBF6EC; --well:#E7DCC8;
+    --line:#E0D6C1; --line-soft:#EAE1D0;
+    --ink:#262219; --ink-2:#56503F; --dim:#8C8268; --faint:#A99E83;
+    --clay:#B65C3E; --clay-deep:#9E4B30; --clay-tint:#EFE0D6;
+    --sage:#6B8A55; --amber:#B5812F; --rust:#A8463A;
+    --mono:'SF Mono',ui-monospace,'Menlo',monospace;
+    --serif:'Tiempos Headline','Tiempos Text','Iowan Old Style',Georgia,ui-serif,serif;
+    --sans:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
+    --sh-sm:0 1px 2px rgba(70,52,24,.05);
+    --sh:0 2px 4px rgba(70,52,24,.05),0 10px 28px rgba(70,52,24,.07);
+    --sh-lift:0 4px 8px rgba(70,52,24,.07),0 18px 44px rgba(70,52,24,.10);
+    --r:13px; --r-lg:18px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:
+      radial-gradient(1200px 600px at 80% -10%, #F3ECDD 0%, transparent 60%),
+      var(--bg);
+    color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.55;
+    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  ::selection{background:var(--clay-tint)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#d9cdb4;border-radius:20px;border:3px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:#cbbd9d;background-clip:content-box}
+
+  /* ---------- top bar ---------- */
+  .topbar{display:flex;align-items:center;gap:18px;height:60px;padding:0 22px;
+    border-bottom:1px solid var(--line);background:rgba(246,240,229,.72);
+    backdrop-filter:saturate(1.2) blur(8px);position:sticky;top:0;z-index:5}
+  .brand{display:flex;align-items:center;gap:11px}
+  .mark{width:26px;height:26px;flex:none;color:var(--clay)}
+  .brand .name{font-family:var(--serif);font-size:20px;font-weight:600;letter-spacing:-.01em;line-height:1}
+  .brand .sub{font-size:10.5px;color:var(--faint);letter-spacing:.14em;text-transform:uppercase;margin-top:3px}
+  .seg-nav{display:inline-flex;background:var(--well);border:1px solid var(--line);
+    border-radius:11px;padding:3px;gap:2px}
+  .seg-nav button{font-family:var(--sans);border:none;background:transparent;color:var(--ink-2);
+    font-size:13px;font-weight:500;padding:6px 16px;border-radius:8px;cursor:pointer;transition:.15s}
+  .seg-nav button:hover{color:var(--ink)}
+  .seg-nav button.on{background:var(--raise);color:var(--ink);box-shadow:var(--sh-sm)}
+  .grow{flex:1}
+  .pill{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-2);
+    background:var(--surface);border:1px solid var(--line);border-radius:30px;padding:6px 13px}
+  .pill .live{width:7px;height:7px;border-radius:50%;background:var(--faint);box-shadow:0 0 0 0 rgba(107,138,85,0)}
+  .pill.ready .live{background:var(--sage);box-shadow:0 0 0 4px rgba(107,138,85,.16)}
+  .pill.err .live{background:var(--rust)}
+  .count{font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+
+  main{height:calc(100% - 60px)}
+  .view{display:none;height:100%} .view.on{display:block}
+
+  /* ---------- dispatch ---------- */
+  .dispatch{display:grid;grid-template-columns:360px 1fr;height:100%}
+  .compose{padding:24px 22px;border-right:1px solid var(--line);
+    background:linear-gradient(180deg,var(--surface),#F2EBDD);overflow:auto}
+  .lead{font-family:var(--serif);font-size:17px;font-weight:600;margin:0 0 2px}
+  .lead-sub{font-size:12.5px;color:var(--dim);margin:0 0 18px}
+  .field{margin-bottom:15px}
+  .lab{display:block;font-size:10.5px;font-weight:600;text-transform:uppercase;
+    letter-spacing:.1em;color:var(--dim);margin:0 0 7px}
+  select,textarea,input{width:100%;background:var(--raise);color:var(--ink);
+    border:1px solid var(--line);border-radius:11px;padding:11px 13px;font-size:13.5px;
+    font-family:inherit;transition:.15s;appearance:none}
+  select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%238C8268' stroke-width='1.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 13px center;padding-right:34px}
+  textarea{resize:vertical;min-height:104px;font-family:var(--mono);font-size:12.5px;line-height:1.6}
+  select:hover,textarea:hover,input:hover{border-color:#d3c8b0}
+  select:focus,textarea:focus,input:focus{outline:none;border-color:var(--clay);
+    box-shadow:0 0 0 3px rgba(182,92,62,.13)}
+  .dispatch-btn{margin-top:6px;width:100%;display:inline-flex;align-items:center;justify-content:center;gap:9px;
+    background:var(--clay);color:#fff;border:none;border-radius:12px;padding:12px 16px;
+    font-size:14px;font-weight:600;font-family:var(--sans);cursor:pointer;
+    box-shadow:0 1px 0 rgba(255,255,255,.18) inset,var(--sh-sm);transition:.15s}
+  .dispatch-btn:hover{background:var(--clay-deep)}
+  .dispatch-btn:active{transform:translateY(1px)}
+  .dispatch-btn:disabled{opacity:.55;cursor:not-allowed}
+  .dispatch-btn svg{width:16px;height:16px}
+  .quick{margin-top:26px}
+  .quick .lab{margin-bottom:10px}
+  .chip{display:inline-block;font-size:12px;background:var(--raise);border:1px solid var(--line);
+    color:var(--ink-2);border-radius:9px;padding:6px 11px;margin:0 7px 7px 0;cursor:pointer;transition:.14s}
+  .chip:hover{border-color:var(--clay);color:var(--ink);background:#fff}
+
+  .board{padding:22px;overflow:auto;display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px;align-content:start}
+  .card{background:var(--raise);border:1px solid var(--line);border-radius:var(--r-lg);
+    display:flex;flex-direction:column;max-height:540px;overflow:hidden;box-shadow:var(--sh);
+    transition:box-shadow .2s,transform .2s}
+  .card:hover{box-shadow:var(--sh-lift);transform:translateY(-2px)}
+  .card .head{display:flex;align-items:center;gap:10px;padding:14px 16px 11px}
+  .ring{width:11px;height:11px;border-radius:50%;flex:none;position:relative}
+  .ring.run{background:var(--clay)} .ring.run::after{content:'';position:absolute;inset:-4px;
+    border-radius:50%;border:1.5px solid var(--clay);opacity:.5;animation:halo 1.3s ease-out infinite}
+  @keyframes halo{0%{transform:scale(.7);opacity:.6}100%{transform:scale(1.5);opacity:0}}
+  .ring.done{background:var(--sage)} .ring.err{background:var(--rust)}
+  .card .title{flex:1;font-size:13.5px;font-weight:600;color:var(--ink);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .iconbtn{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;
+    border-radius:8px;color:var(--faint);text-decoration:none;transition:.14s}
+  .iconbtn:hover{background:var(--well);color:var(--clay)}
+  .iconbtn svg{width:15px;height:15px}
+  .card .sid{padding:0 16px 12px;font-family:var(--mono);font-size:10.5px;color:var(--faint);
+    border-bottom:1px solid var(--line-soft);letter-spacing:.02em}
+  .log{padding:13px 16px;overflow:auto;font-size:13px;line-height:1.6}
+  .log .agent{white-space:pre-wrap;word-break:break-word;color:var(--ink)}
+  .log .think{color:var(--dim);font-style:italic;margin:3px 0}
+  .k{display:inline-block;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--clay);background:var(--clay-tint);border-radius:5px;padding:1px 6px;margin-right:7px;
+    font-family:var(--sans);vertical-align:1px}
+  .log .tool{margin:5px 0;color:var(--ink-2)}
+  .log .tool .k{color:var(--ink-2);background:var(--well)}
+  .log .fleet{margin:8px 0 4px;font-family:var(--mono);font-size:12px;color:var(--ink);
+    white-space:pre-wrap;word-break:break-word}
+  .log .fres{font-family:var(--mono);font-size:11.5px;background:var(--surface);
+    border:1px solid var(--line-soft);border-radius:9px;padding:8px 10px;margin:0 0 9px;
+    white-space:pre-wrap;word-break:break-word;color:var(--ink-2)}
+  .tag{display:inline-block;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;
+    border-radius:5px;padding:1px 6px;margin-right:8px;font-family:var(--sans)}
+  .tag.ok{color:#fff;background:var(--sage)} .tag.bad{color:#fff;background:var(--rust)}
+  .log .err{color:var(--rust);margin:4px 0;white-space:pre-wrap;word-break:break-word}
+  .log .err .k{color:#fff;background:var(--rust)}
+  .empty{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;text-align:center;padding:90px 0;color:var(--dim)}
+  .empty svg{width:46px;height:46px;color:var(--faint);margin-bottom:16px;opacity:.7}
+  .empty .t{font-family:var(--serif);font-size:18px;color:var(--ink-2);margin-bottom:5px}
+  .empty .d{font-size:13px;color:var(--dim)}
+
+  /* ---------- settings ---------- */
+  .settings{display:grid;grid-template-columns:248px 1fr;height:100%}
+  .rail{border-right:1px solid var(--line);background:var(--surface);padding:18px 14px;overflow:auto}
+  .rail .seg-tabs{display:flex;background:var(--well);border:1px solid var(--line);
+    border-radius:10px;padding:3px;margin-bottom:18px}
+  .rail .tab{flex:1;text-align:center;padding:7px 6px;border-radius:7px;cursor:pointer;
+    font-size:12px;font-weight:500;color:var(--ink-2);transition:.14s}
+  .rail .tab.on{background:var(--raise);color:var(--ink);box-shadow:var(--sh-sm)}
+  .rail .grouphead{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.12em;
+    color:var(--faint);margin:6px 8px 9px}
+  .rail .item{padding:9px 11px;border-radius:9px;font-size:13px;cursor:pointer;color:var(--ink);
+    margin-bottom:3px;transition:.13s;border:1px solid transparent}
+  .rail .item:hover{background:var(--raise)}
+  .rail .item.on{background:var(--raise);border-color:var(--line);box-shadow:var(--sh-sm)}
+  .rail .item.new{color:var(--clay);font-weight:600}
+  .rail .item .sub{font-size:10.5px;color:var(--faint);font-family:var(--mono);margin-top:2px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pane{padding:30px 36px;overflow:auto;max-width:920px}
+  .pane h2{font-family:var(--serif);font-size:22px;font-weight:600;margin:0 0 5px;letter-spacing:-.01em}
+  .pane h2.mono{font-family:var(--mono);font-size:14px;font-weight:600}
+  .pane .hint{font-size:13px;color:var(--dim);margin:0 0 20px;max-width:62ch}
+  .editor{width:100%;min-height:54vh;background:var(--raise);border:1px solid var(--line);
+    border-radius:12px;padding:16px 18px;font-family:var(--mono);font-size:12.5px;line-height:1.65;
+    tab-size:2;color:var(--ink);resize:vertical;box-shadow:inset 0 1px 2px rgba(70,52,24,.04)}
+  .editor:focus{outline:none;border-color:var(--clay);box-shadow:0 0 0 3px rgba(182,92,62,.13)}
+  .bar{display:flex;gap:14px;align-items:center;margin:16px 0}
+  .btn{display:inline-flex;align-items:center;gap:8px;cursor:pointer;background:var(--raise);
+    color:var(--ink);border:1px solid var(--line);border-radius:11px;padding:10px 16px;
+    font-size:13px;font-weight:500;font-family:var(--sans);transition:.14s}
+  .btn:hover{border-color:#d3c8b0}
+  .btn.go{background:var(--clay);border-color:var(--clay);color:#fff;font-weight:600}
+  .btn.go:hover{background:var(--clay-deep);border-color:var(--clay-deep)}
+  .btn svg{width:15px;height:15px}
+  .msg{font-size:12.5px;font-variant-numeric:tabular-nums}
+  .msg.ok{color:var(--sage)} .msg.bad{color:var(--rust)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:4px}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--well)}
+  .seg button{border:none;background:transparent;color:var(--ink-2);padding:9px 18px;
+    font-size:13px;font-family:var(--sans);cursor:pointer;transition:.14s}
+  .seg button.on{background:var(--clay);color:#fff}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">
+    <!-- fleet logomark: three connected nodes -->
+    <svg class="mark" viewBox="0 0 28 28" fill="none">
+      <path d="M14 5.2L22.5 10v8L14 22.8 5.5 18v-8L14 5.2Z" stroke="currentColor" stroke-width="1.4" opacity=".35"/>
+      <circle cx="14" cy="6.5" r="2.5" fill="currentColor"/>
+      <circle cx="7" cy="19" r="2.5" fill="currentColor"/>
+      <circle cx="21" cy="19" r="2.5" fill="currentColor"/>
+      <path d="M14 6.5L7 19M14 6.5L21 19M7 19h14" stroke="currentColor" stroke-width="1.3" opacity=".55"/>
+    </svg>
+    <div>
+      <div class="name">Fleet Dispatcher</div>
+      <div class="sub">Orchestration Console</div>
+    </div>
+  </div>
+  <div class="seg-nav">
+    <button id="navDispatch" class="on" onclick="show('dispatch')">Dispatch</button>
+    <button id="navSettings" onclick="show('settings')">Settings</button>
+  </div>
+  <div class="grow"></div>
+  <span class="count" id="agentCount">&nbsp;</span>
+  <span class="pill" id="statusPill"><span class="live"></span><span id="status">connecting</span></span>
+</div>
+
+<main>
+  <!-- DISPATCH -->
+  <section class="view on" id="view-dispatch">
+   <div class="dispatch">
+    <aside class="compose">
+      <h1 class="lead">New dispatch</h1>
+      <p class="lead-sub">Route a task to an agent and environment.</p>
+      <div class="field"><span class="lab">Agent</span><select id="agent"></select></div>
+      <div class="field"><span class="lab">Environment</span><select id="env"></select></div>
+      <div class="field"><span class="lab">Vault · MCP credentials</span><select id="vault"><option value="">None</option></select></div>
+      <div class="field"><span class="lab">Prompt</span>
+        <textarea id="prompt" placeholder="Describe the task…  (⌘↵ to dispatch)"></textarea></div>
+      <button class="dispatch-btn" id="go">
+        <span>Dispatch</span>
+        <svg viewBox="0 0 16 16" fill="none"><path d="M3 8h9M8.5 4.5L12 8l-3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="quick"><span class="lab">Fleet quick-dispatch</span><div id="chips"></div></div>
+    </aside>
+    <div class="board" id="board">
+      <div class="empty" id="empty">
+        <svg viewBox="0 0 28 28" fill="none"><path d="M14 4l9 5v10l-9 5-9-5V9l9-5Z" stroke="currentColor" stroke-width="1.3"/><circle cx="14" cy="14" r="3" fill="currentColor"/></svg>
+        <div class="t">No active dispatches</div>
+        <div class="d">Send a task and it streams here live.</div>
+      </div>
+    </div>
+   </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="view" id="view-settings">
+   <div class="settings">
+    <aside class="rail">
+      <div class="seg-tabs">
+        <div class="tab on" data-st="agents" onclick="stab('agents')">Agents</div>
+        <div class="tab" data-st="envs" onclick="stab('envs')">Envs</div>
+        <div class="tab" data-st="files" onclick="stab('files')">Files</div>
+      </div>
+      <div id="railList"></div>
+    </aside>
+    <div class="pane" id="pane"></div>
+   </div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const ICON = {
+  ext:'<svg viewBox="0 0 16 16" fill="none"><path d="M6 3H4a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1v-2M9.5 2.5H13.5V6.5M13 3L7.5 8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  plus:'<svg viewBox="0 0 16 16" fill="none"><path d="M8 3.5v9M3.5 8h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  save:'<svg viewBox="0 0 16 16" fill="none"><path d="M3 3h8l2 2v8H3V3Z" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 3v3h5" stroke="currentColor" stroke-width="1.3"/></svg>',
+};
+let TARGETS={agents:[],environments:[],vaults:[],fleet:[]}, CUR_ST='agents', ENV_TYPE='cloud';
+
+function show(v){
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('on'));
+  $('#view-'+v).classList.add('on');
+  $('#navDispatch').classList.toggle('on',v==='dispatch');
+  $('#navSettings').classList.toggle('on',v==='settings');
+  if(v==='settings') stab(CUR_ST);
+}
+
+/* ---------- targets ---------- */
+async function loadTargets(){
+  try{
+    const d=await (await fetch('/api/targets')).json();
+    if(d.error){ $('#status').textContent=d.error; $('#statusPill').className='pill err'; return; }
+    TARGETS=d;
+    const opt=(o,x='')=>`<option value="${o.id}">${esc(o.name)}${x}</option>`;
+    $('#agent').innerHTML=d.agents.map(a=>opt(a)).join('')||'<option value="">No agents — create one in Settings</option>';
+    $('#env').innerHTML=d.environments.map(e=>opt(e,' · '+e.type)).join('');
+    $('#vault').innerHTML='<option value="">None</option>'+d.vaults.map(v=>opt(v)).join('');
+    $('#agentCount').textContent=`${d.agents.length} agents · ${d.environments.length} envs`;
+    $('#status').textContent='Connected'; $('#statusPill').className='pill ready';
+    $('#chips').innerHTML=(d.fleet||[]).map(m=>
+      `<span class="chip" data-cmd="On ${m}: report uptime, free disk, and load average.">${m}</span>`).join('')
+      +`<span class="chip" data-cmd="Across WORKHORSE, ADMIN, and QUICKS: report uptime and free disk; flag any disk over 85%.">All fleet · health</span>`;
+    document.querySelectorAll('#chips .chip').forEach(c=>c.onclick=()=>{$('#prompt').value=c.dataset.cmd;$('#prompt').focus();});
+  }catch(e){ $('#status').textContent='offline'; $('#statusPill').className='pill err'; }
+}
+
+/* ---------- dispatch ---------- */
+function newCard(sid,prompt,console){
+  $('#empty')?.remove();
+  const c=document.createElement('div'); c.className='card'; c.id='c-'+sid;
+  c.innerHTML=`<div class="head"><span class="ring run"></span>
+    <span class="title">${esc(prompt).slice(0,72)}</span>
+    <a class="iconbtn" href="${console}" target="_blank" title="Open in Console">${ICON.ext}</a></div>
+    <div class="sid">${sid}</div><div class="log"></div>`;
+  $('#board').prepend(c); return c;
+}
+function dispatchUI(sid,prompt,console){
+  const card=newCard(sid,prompt,console), log=card.querySelector('.log'), ring=card.querySelector('.ring');
+  let tn=null;
+  const add=(cls,h)=>{const p=document.createElement('div');p.className=cls;p.innerHTML=h;log.appendChild(p);log.scrollTop=log.scrollHeight;return p;};
+  const es=new EventSource('/api/stream/'+sid);
+  es.onmessage=ev=>{const m=JSON.parse(ev.data);
+    if(m.kind==='text'){ if(!tn) tn=add('agent',''); tn.textContent+=m.text; log.scrollTop=log.scrollHeight; }
+    else if(m.kind==='status'){ add('think',esc(m.text)); tn=null; }
+    else if(m.kind==='tool'){ add('tool',`<span class="k">tool</span>${esc(m.name)}`); tn=null; }
+    else if(m.kind==='fleet'){ add('fleet',`<span class="k">${esc(m.machine)}</span>${esc(m.command)}`); tn=null; }
+    else if(m.kind==='fleet_result'){ add('fres',`<span class="tag ${m.error?'bad':'ok'}">${m.error?'err':'ok'}</span>${esc(m.output)}`); tn=null; }
+    else if(m.kind==='error'){ add('err',`<span class="k">error</span>${esc(m.text)}`); ring.className='ring err'; }
+    else if(m.kind==='done'){ ring.className='ring '+(m.reason==='error'?'err':'done'); es.close(); }
+  };
+  es.onerror=()=>{ ring.className='ring done'; es.close(); };
+}
+$('#go').onclick=async()=>{
+  const prompt=$('#prompt').value.trim(); if(!prompt) return;
+  const btn=$('#go'); btn.disabled=true; btn.querySelector('span').textContent='Dispatching…';
+  try{
+    const d=await (await fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({agent_id:$('#agent').value,environment_id:$('#env').value,vault_id:$('#vault').value,prompt})})).json();
+    if(d.error) alert('Dispatch failed: '+d.error);
+    else { dispatchUI(d.session_id,prompt,d.console); $('#prompt').value=''; }
+  }catch(e){ alert('Error: '+e); }
+  btn.disabled=false; btn.querySelector('span').textContent='Dispatch';
+};
+$('#prompt').addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.key==='Enter') $('#go').click(); });
+
+/* ---------- settings ---------- */
+function stab(name){
+  CUR_ST=name;
+  document.querySelectorAll('.rail .tab').forEach(t=>t.classList.toggle('on',t.dataset.st===name));
+  if(name==='agents') renderAgents();
+  if(name==='envs') renderEnvs();
+  if(name==='files') renderFiles();
+}
+const AGENT_TEMPLATE=`name: New Agent
+model: claude-fable-5
+system: |
+  You are a helpful agent.
+tools:
+  - type: agent_toolset_20260401
+    default_config: {enabled: true}
+mcp_servers: []
+skills: []
+`;
+function renderAgents(){
+  $('#railList').innerHTML=`<div class="grouphead">Agents</div>`+
+    `<div class="item new" onclick="newAgent()">＋&nbsp; New agent</div>`.replace('＋',ICON.plus)+
+    TARGETS.agents.map(a=>`<div class="item" data-aid="${a.id}" onclick="loadAgent('${a.id}')">
+      <div>${esc(a.name)}</div><div class="sub">${a.id}</div></div>`).join('');
+  $('#pane').innerHTML=`<h2>Agents</h2><p class="hint">Edit an agent's full configuration as YAML — model, system prompt, tools, MCP servers, skills. Saving an existing agent creates a new version. Select one on the left to begin.</p>`;
+}
+function agentEditor(title,yamlText,aid){
+  $('#pane').innerHTML=`<h2>${esc(title)}</h2>
+    <p class="hint">${aid?('Editing '+aid+' — saving creates a new version.'):'New agent — saving creates it.'}</p>
+    <textarea class="editor" id="agYaml" spellcheck="false">${esc(yamlText)}</textarea>
+    <div class="bar"><button class="btn go" onclick="saveAgent('${aid||''}')">${ICON.save}${aid?'Save new version':'Create agent'}</button>
+    <span class="msg" id="agMsg"></span></div>`;
+}
+function newAgent(){ document.querySelectorAll('.rail .item').forEach(i=>i.classList.remove('on')); agentEditor('New agent',AGENT_TEMPLATE,''); }
+async function loadAgent(aid){
+  document.querySelectorAll('.rail .item').forEach(i=>i.classList.toggle('on',i.dataset.aid===aid));
+  $('#pane').innerHTML='<p class="hint">Loading…</p>';
+  const d=await (await fetch('/api/agent?id='+aid+'&yaml=1')).json();
+  if(d.error){ $('#pane').innerHTML=`<p class="msg bad">${esc(d.error)}</p>`; return; }
+  agentEditor((TARGETS.agents.find(a=>a.id===aid)||{}).name||'Agent',d.yaml,aid);
+}
+async function saveAgent(aid){
+  const msg=$('#agMsg'); msg.className='msg'; msg.textContent='Saving…';
+  const body={yaml:$('#agYaml').value}; if(aid) body.id=aid;
+  const d=await (await fetch('/api/agent/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  if(d.error){ msg.className='msg bad'; msg.textContent=d.error; return; }
+  msg.className='msg ok'; msg.textContent=`${d.action} · ${d.id}${d.version?(' · v'+d.version):''}`;
+  await loadTargets(); renderAgents(); if(d.id) loadAgent(d.id);
+}
+function renderEnvs(){
+  $('#railList').innerHTML=`<div class="grouphead">Environments</div>`+
+    TARGETS.environments.map(e=>`<div class="item"><div>${esc(e.name)}</div><div class="sub">${e.type} · ${e.id}</div></div>`).join('');
+  $('#pane').innerHTML=`<h2>New environment</h2>
+    <p class="hint">A reusable sandbox config. Cloud runs on Anthropic's infrastructure; self-hosted runs tool execution on your own worker (WORKHORSE).</p>
+    <div class="grid2">
+      <div><span class="lab">Name</span><input id="envName" placeholder="fleet-dispatcher-cloud"></div>
+      <div><span class="lab">Type</span>
+        <div class="seg"><button id="etCloud" class="on" onclick="setEnvType('cloud')">cloud</button>
+        <button id="etSelf" onclick="setEnvType('self_hosted')">self-hosted</button></div></div>
+    </div>
+    <div class="field" id="netWrap" style="margin-top:14px;max-width:300px"><span class="lab">Networking</span>
+      <select id="envNet"><option value="unrestricted">unrestricted</option><option value="limited">limited</option></select></div>
+    <div class="bar"><button class="btn go" onclick="saveEnv()">${ICON.plus}Create environment</button><span class="msg" id="envMsg"></span></div>`;
+}
+function setEnvType(t){ ENV_TYPE=t;
+  $('#etCloud').classList.toggle('on',t==='cloud'); $('#etSelf').classList.toggle('on',t==='self_hosted');
+  $('#netWrap').style.display=t==='cloud'?'block':'none'; }
+async function saveEnv(){
+  const msg=$('#envMsg'); msg.className='msg'; msg.textContent='Creating…';
+  const body={name:$('#envName').value.trim(),type:ENV_TYPE,networking:$('#envNet')?.value||'unrestricted'};
+  if(!body.name){ msg.className='msg bad'; msg.textContent='Name required'; return; }
+  const d=await (await fetch('/api/env/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  if(d.error){ msg.className='msg bad'; msg.textContent=d.error; return; }
+  msg.className='msg ok'; msg.textContent='Created · '+d.id; await loadTargets(); renderEnvs();
+}
+async function renderFiles(){
+  const d=await (await fetch('/api/fs/list')).json();
+  $('#railList').innerHTML=`<div class="grouphead">Config files · ${(d.files||[]).length}</div>`+
+    (d.files||[]).map(f=>`<div class="item" data-fp="${f.path}" onclick="openFile('${f.path}')">
+      <div>${esc(f.path.split('/').pop())}</div><div class="sub">${esc(f.path)}</div></div>`).join('');
+  $('#pane').innerHTML=`<h2>Config files</h2><p class="hint">Edit Markdown, JSON, YAML, and .env files under the project directory and ~/.claude. JSON and YAML are validated before saving. Select a file on the left.</p>`;
+}
+async function openFile(path){
+  document.querySelectorAll('.rail .item').forEach(i=>i.classList.toggle('on',i.dataset.fp===path));
+  $('#pane').innerHTML='<p class="hint">Loading…</p>';
+  const d=await (await fetch('/api/fs/read?path='+encodeURIComponent(path))).json();
+  if(d.error){ $('#pane').innerHTML=`<p class="msg bad">${esc(d.error)}</p>`; return; }
+  $('#pane').innerHTML=`<h2 class="mono">${esc(path)}</h2><p class="hint">${d.exists?'':'New file.'}</p>
+    <textarea class="editor" id="fileBody" spellcheck="false">${esc(d.content)}</textarea>
+    <div class="bar"><button class="btn go" onclick="saveFile('${path}')">${ICON.save}Save</button><span class="msg" id="fileMsg"></span></div>`;
+}
+async function saveFile(path){
+  const msg=$('#fileMsg'); msg.className='msg'; msg.textContent='Saving…';
+  const d=await (await fetch('/api/fs/write',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({path,content:$('#fileBody').value})})).json();
+  if(d.error){ msg.className='msg bad'; msg.textContent=d.error; return; }
+  msg.className='msg ok'; msg.textContent=`Saved · ${d.bytes} bytes`; renderFiles();
+}
+loadTargets();
+</script>
+</body>
+</html>

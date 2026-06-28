@@ -1,0 +1,4 @@
+# Fleet Dispatcher — Managed Agents (Python)
+# Self-hosted worker (path A) needs the environments helper, shipped in the core SDK.
+anthropic>=0.92.0
+python-dotenv>=1.0.0

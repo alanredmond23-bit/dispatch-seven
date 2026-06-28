@@ -1,0 +1,138 @@
+"""Shared config + helpers for Fleet Dispatcher.
+
+Two execution models share this module:
+  A. Self-hosted sandbox  -> worker_selfhosted.py + run_selfhosted.py
+  B. Cloud + custom tool   -> run_cloud.py
+"""
+from __future__ import annotations
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+MODEL = "claude-fable-5"  # most capable; Managed Agents manages thinking/effort itself
+
+# Anthropic skills the agent can auto-load when relevant. Custom org skills:
+# add {"type": "custom", "skill_id": "skill_...", "version": "latest"} (max 20 total).
+# Namespaced skills (e.g. "legal:bankruptcy-ops") use colon format as skill_id —
+# verify with SDK docs if the Managed Agents API changes the delimiter.
+SKILLS = [
+    # --- Document production ---
+    {"type": "anthropic", "skill_id": "xlsx"},
+    {"type": "anthropic", "skill_id": "docx"},
+    {"type": "anthropic", "skill_id": "pptx"},
+    {"type": "anthropic", "skill_id": "pdf"},
+
+    # --- Intelligence & memory ---
+    {"type": "anthropic", "skill_id": "ai-daily-debrief"},
+    {"type": "anthropic", "skill_id": "project-memory"},
+    {"type": "anthropic", "skill_id": "extract"},
+    {"type": "anthropic", "skill_id": "extractor-beginning-of-funnel-after-research"},
+
+    # --- Infrastructure & fleet ---
+    {"type": "anthropic", "skill_id": "blob-scanner"},
+    {"type": "anthropic", "skill_id": "smart-office"},
+
+    # --- Legal & dockets ---
+    {"type": "anthropic", "skill_id": "docket-pull"},
+    {"type": "anthropic", "skill_id": "legal:bankruptcy-ops"},
+    {"type": "anthropic", "skill_id": "legal:edpa-criminal"},
+    {"type": "anthropic", "skill_id": "legal:deadline-calendar"},
+    {"type": "anthropic", "skill_id": "legal:malpractice-accountability"},
+    {"type": "anthropic", "skill_id": "legal:sba-adversary"},
+
+    # --- Productivity ---
+    {"type": "anthropic", "skill_id": "omnifocus-reorg"},
+]
+
+# GitHub MCP server (declared on the agent; credentials live in a vault).
+GITHUB_MCP = {"type": "url", "name": "github", "url": "https://api.githubcopilot.com/mcp/"}
+
+SYSTEM_PROMPT = """You are Fleet Dispatcher, an autonomous orchestration agent for Alan's
+3-machine fleet (WORKHORSE, ADMIN, QUICKS). You coordinate and execute tasks across the
+fleet, manage GitHub (review code, push branches, open PRs), and run web research.
+
+Operating rules:
+- For fleet commands, target the correct machine explicitly. Prefer idempotent, scoped
+  commands. Show the command and its output; never run destructive commands (rm -rf,
+  disk format, credential changes) without stating exactly what you will do first.
+- For minor choices, pick a reasonable option and note it rather than asking.
+- For scope changes or destructive/irreversible actions, stop and ask first.
+- Default to brief progress notes between tool calls; end with a 1-2 sentence outcome.
+- Cite sources inline when you do research."""
+
+# Fleet SSH targets. The worker (A) / orchestrator (B) runs as your user on WORKHORSE,
+# so SSH uses your existing ~/.ssh/config and keys — no secret injection needed.
+# Adjust hostnames to match your ssh config (memory: ADMIN reachable as admin.local).
+FLEET_HOSTS = {
+    "WORKHORSE": None,           # local — run directly, no ssh
+    "ADMIN": "admin.local",
+    "QUICKS": "quicks.local",
+}
+
+# fleet_exec custom tool (path B): the cloud agent calls this; your host runs it.
+FLEET_EXEC_TOOL = {
+    "type": "custom",
+    "name": "fleet_exec",
+    "description": (
+        "Run a shell command on a fleet machine. Use for inspecting or controlling "
+        "WORKHORSE/ADMIN/QUICKS. Returns combined stdout/stderr and the exit code."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "machine": {"type": "string", "enum": list(FLEET_HOSTS.keys())},
+            "command": {"type": "string", "description": "Shell command to execute"},
+        },
+        "required": ["machine", "command"],
+    },
+}
+
+
+def env(name: str, *, required: bool = True) -> str:
+    val = os.environ.get(name, "")
+    if required and not val:
+        raise SystemExit(f"Missing {name} in environment / .env")
+    return val
+
+
+def notify(
+    title: str,
+    message: str,
+    priority: str = "default",
+    tags: list[str] | None = None,
+) -> None:
+    """Send a push notification via ntfy.sh.
+
+    Requires NTFY_TOPIC in environment (e.g. NTFY_TOPIC=alanredmond).
+    Fails silently on any error — never crashes the calling loop.
+
+    Priority levels:  "urgent" | "high" | "default" | "low" | "min"
+    Tags: ntfy emoji shortcodes, e.g. ["white_check_mark", "rotating_light"]
+    """
+    import urllib.request
+
+    topic = os.environ.get("NTFY_TOPIC", "").strip()
+    if not topic:
+        return
+    try:
+        headers: dict[str, str] = {
+            "Title": title[:250],
+            "Priority": priority,
+            "Content-Type": "text/plain; charset=utf-8",
+        }
+        if tags:
+            headers["Tags"] = ",".join(tags)
+        req = urllib.request.Request(
+            f"https://ntfy.sh/{topic}",
+            data=message.encode("utf-8", errors="replace"),
+            headers=headers,
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass  # never propagate — caller must not be disrupted
+
+
+def console_url(session_id: str, workspace: str = "default") -> str:
+    return f"https://platform.claude.com/workspaces/{workspace}/sessions/{session_id}"

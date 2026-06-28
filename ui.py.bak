@@ -1,0 +1,289 @@
+"""Fleet Dispatcher UI — local dispatch console for workers, agents, and fleet machines.
+
+Better-than-Dispatch design goals:
+  - Multi-target: dispatch to a cloud Managed Agent, the self-hosted (WORKHORSE) agent,
+    or DIRECTLY to a fleet machine (local bash / ssh) — Dispatch only talks to sessions.
+  - Parallel: every dispatch is an independent job card with its own live SSE stream.
+  - Host-side tool bridge: cloud agent's fleet_exec calls are executed here and answered
+    automatically — secrets never leave this machine.
+  - Zero-config startup: fleet targets work with no API key; agent targets light up once
+    provisioned (one-click Provision button runs setup).
+
+Run:  python3 ui.py   →  http://127.0.0.1:8424
+Stdlib HTTP server only — no framework dependencies.
+"""
+from __future__ import annotations
+
+import json
+import os
+import queue
+import subprocess
+import threading
+import time
+import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+PORT = 8424
+
+# --- config -----------------------------------------------------------------
+
+FLEET_HOSTS = {"WORKHORSE": None, "ADMIN": "admin.local", "QUICKS": "quicks.local"}
+
+def load_env() -> dict:
+    """Merge os.environ with .env and fleet.ids.json (no dotenv dep needed)."""
+    cfg = dict(os.environ)
+    for fname in (".env",):
+        path = os.path.join(ROOT, fname)
+        if os.path.exists(path):
+            for line in open(path):
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, _, v = line.partition("=")
+                    cfg.setdefault(k.strip(), v.strip())
+    ids_path = os.path.join(ROOT, "fleet.ids.json")
+    if os.path.exists(ids_path):
+        for k, v in json.load(open(ids_path)).items():
+            if v:
+                cfg.setdefault(k, v)
+    return cfg
+
+# --- job engine --------------------------------------------------------------
+
+JOBS: dict[str, dict] = {}          # job_id -> {queue, target, prompt, status, started}
+JOBS_LOCK = threading.Lock()
+
+def new_job(target: str, prompt: str) -> str:
+    job_id = uuid.uuid4().hex[:12]
+    with JOBS_LOCK:
+        JOBS[job_id] = {
+            "queue": queue.Queue(), "target": target, "prompt": prompt,
+            "status": "running", "started": time.time(),
+        }
+    return job_id
+
+def emit(job_id: str, kind: str, text: str) -> None:
+    JOBS[job_id]["queue"].put({"kind": kind, "text": text})
+
+def finish(job_id: str, status: str = "done") -> None:
+    JOBS[job_id]["status"] = status
+    JOBS[job_id]["queue"].put(None)  # sentinel closes the SSE stream
+
+# --- target: direct fleet machine --------------------------------------------
+
+def run_fleet_job(job_id: str, machine: str, command: str) -> None:
+    host = FLEET_HOSTS.get(machine)
+    argv = ["bash", "-lc", command] if host is None else [
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, command]
+    emit(job_id, "info", f"$ {' '.join(argv) if host else command}  [{machine}]")
+    try:
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1)
+        for line in proc.stdout:
+            emit(job_id, "out", line.rstrip("\n"))
+        proc.wait(timeout=300)
+        emit(job_id, "info", f"exit {proc.returncode}")
+        finish(job_id, "done" if proc.returncode == 0 else "error")
+    except Exception as e:  # noqa: BLE001 — surface everything to the UI
+        emit(job_id, "err", str(e))
+        finish(job_id, "error")
+
+# --- target: managed agent sessions -------------------------------------------
+
+def get_client():
+    import anthropic
+    return anthropic.Anthropic(api_key=load_env().get("ANTHROPIC_API_KEY"))
+
+def run_fleet_command(machine: str, command: str) -> tuple[str, bool]:
+    host = FLEET_HOSTS.get(machine)
+    if machine not in FLEET_HOSTS:
+        return f"Unknown machine {machine}", True
+    argv = ["bash", "-lc", command] if host is None else [
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, command]
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return "timed out after 120s", True
+    return ((p.stdout or "") + (p.stderr or "")).strip() or "(no output)", p.returncode != 0
+
+def run_agent_job(job_id: str, which: str, prompt: str) -> None:
+    cfg = load_env()
+    agent_id = cfg.get("AGENT_CLOUD_ID" if which == "cloud" else "AGENT_SELFHOSTED_ID")
+    env_id = cfg.get("CLOUD_ENV_ID" if which == "cloud" else "SELFHOSTED_ENV_ID")
+    if not (agent_id and env_id and cfg.get("ANTHROPIC_API_KEY")):
+        emit(job_id, "err", "Not provisioned — click Provision (needs ANTHROPIC_API_KEY in .env).")
+        finish(job_id, "error")
+        return
+    try:
+        client = get_client()
+        vaults = [v] if (v := cfg.get("GITHUB_VAULT_ID")) else []
+        session = client.beta.sessions.create(
+            agent=agent_id, environment_id=env_id, vault_ids=vaults,
+            title=f"UI dispatch ({which})")
+        emit(job_id, "info",
+             f"session {session.id} — console: https://platform.claude.com/workspaces/default/sessions/{session.id}")
+        stream = client.beta.sessions.events.stream(session_id=session.id)
+        client.beta.sessions.events.send(
+            session_id=session.id,
+            events=[{"type": "user.message", "content": [{"type": "text", "text": prompt}]}])
+        for event in stream:
+            if event.type == "agent.message":
+                for block in event.content:
+                    if block.type == "text":
+                        emit(job_id, "out", block.text)
+            elif event.type == "agent.tool_use":
+                emit(job_id, "tool", f"tool: {event.name}")
+            elif event.type == "agent.custom_tool_use" and event.name == "fleet_exec":
+                m, c = event.input["machine"], event.input["command"]
+                emit(job_id, "tool", f"fleet_exec {m}: {c}")
+                output, is_err = run_fleet_command(m, c)
+                emit(job_id, "out", output)
+                client.beta.sessions.events.send(
+                    session_id=session.id,
+                    events=[{"type": "user.custom_tool_result",
+                             "custom_tool_use_id": event.id,
+                             "content": [{"type": "text", "text": output}],
+                             "is_error": is_err}])
+            elif event.type == "session.error":
+                emit(job_id, "err", str(getattr(event, "error", event)))
+            elif event.type == "session.status_terminated":
+                finish(job_id, "error"); return
+            elif event.type == "session.status_idle":
+                if event.stop_reason.type != "requires_action":
+                    finish(job_id); return
+    except Exception as e:  # noqa: BLE001
+        emit(job_id, "err", f"{type(e).__name__}: {e}")
+        finish(job_id, "error")
+
+# --- provisioning -------------------------------------------------------------
+
+def run_provision_job(job_id: str) -> None:
+    py = os.path.join(ROOT, ".venv", "bin", "python")
+    if not os.path.exists(py):
+        py = "python3"
+    emit(job_id, "info", "running setup.py (creates environments + agents + vault)...")
+    try:
+        p = subprocess.Popen([py, "setup.py"], cwd=ROOT, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in p.stdout:
+            emit(job_id, "out", line.rstrip("\n"))
+        p.wait(timeout=300)
+        finish(job_id, "done" if p.returncode == 0 else "error")
+    except Exception as e:  # noqa: BLE001
+        emit(job_id, "err", str(e))
+        finish(job_id, "error")
+
+# --- HTTP layer ----------------------------------------------------------------
+
+def status_payload() -> dict:
+    cfg = load_env()
+    return {
+        "api_key": bool(cfg.get("ANTHROPIC_API_KEY")),
+        "cloud_agent": bool(cfg.get("AGENT_CLOUD_ID")),
+        "selfhosted_agent": bool(cfg.get("AGENT_SELFHOSTED_ID")),
+        "github_vault": bool(cfg.get("GITHUB_VAULT_ID")),
+        "fleet": list(FLEET_HOSTS.keys()),
+        "jobs": {jid: {"target": j["target"], "status": j["status"],
+                       "prompt": j["prompt"][:80]} for jid, j in JOBS.items()},
+    }
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *a):  # quiet
+        pass
+
+    def _json(self, obj, code=200):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path == "/":
+            body = HTML.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/api/status":
+            self._json(status_payload())
+        elif self.path.startswith("/api/stream/"):
+            job_id = self.path.rsplit("/", 1)[-1]
+            job = JOBS.get(job_id)
+            if not job:
+                self._json({"error": "no such job"}, 404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            q = job["queue"]
+            try:
+                while True:
+                    try:
+                        item = q.get(timeout=25)
+                    except queue.Empty:
+                        self.wfile.write(b": heartbeat\n\n")
+                        self.wfile.flush()
+                        continue
+                    if item is None:
+                        self.wfile.write(f"data: {json.dumps({'kind': 'end', 'status': job['status']})}\n\n".encode())
+                        self.wfile.flush()
+                        break
+                    self.wfile.write(f"data: {json.dumps(item)}\n\n".encode())
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        else:
+            self._json({"error": "not found"}, 404)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        data = json.loads(self.rfile.read(length) or b"{}")
+        if self.path == "/api/dispatch":
+            target, prompt = data.get("target", ""), data.get("prompt", "").strip()
+            if not prompt and target != "provision":
+                self._json({"error": "empty prompt"}, 400)
+                return
+            job_id = new_job(target, prompt or "(provision)")
+            if target.startswith("fleet:"):
+                t = threading.Thread(target=run_fleet_job,
+                                     args=(job_id, target.split(":", 1)[1], prompt), daemon=True)
+            elif target in ("cloud", "selfhosted"):
+                t = threading.Thread(target=run_agent_job, args=(job_id, target, prompt), daemon=True)
+            elif target == "provision":
+                t = threading.Thread(target=run_provision_job, args=(job_id,), daemon=True)
+            else:
+                self._json({"error": f"unknown target {target}"}, 400)
+                return
+            t.start()
+            self._json({"job_id": job_id})
+        else:
+            self._json({"error": "not found"}, 404)
+
+# --- frontend -------------------------------------------------------------------
+
+HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Fleet Dispatcher</title>
+<style>
+:root{--bg:#0b0f14;--panel:#121821;--edge:#1f2a37;--ink:#dbe4ee;--dim:#7b8a9c;
+--blue:#3b82f6;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,Segoe UI,sans-serif;padding:24px;max-width:1200px;margin:0 auto}
+h1{font-size:18px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink)}
+h1 span{color:var(--blue)}
+.sub{color:var(--dim);font-size:12px;margin:4px 0 18px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.pill{border:1px solid var(--edge);border-radius:99px;padding:3px 11px;font-size:11px;color:var(--dim)}
+.pill.on{color:var(--green);border-color:#14532d}
+.pill.off{color:var(--amber);border-color:#78350f}
+.dispatch{background:var(--panel);border:1px solid var(--edge);border-radius:10px;padding:14px;display:flex;gap:10px;align-items:flex-start}
+textarea{flex:1;background:#0d1320;border:1px solid var(--edge);border-radius:8px;color:var(--ink);
+padding:10px;font:13px/1.4 var(--mono);min-height:64px;resize:vertical}
+select,button{background:#0d1320;border:1px solid var(--edge);border-radius:8px;color:var(--ink);padding:10px 14px;font-size:13px;cursor:pointer}
+button.go{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600}
+button.go:hover{filter:brightness(1.12)}
+button.ghost{color:var(--dim)}
+.quick{display:flex;gap:8px;margin:10px 0 18
