@@ -406,6 +406,12 @@ export const deadlineSweep = inngest.createFunction(
   }
 );
 
+// ── Turn 7: Legal pipeline jobs ───────────────────────────────────────────────
+// five9IndexJob   — nightly Azure blob → legal_evidence upsert
+// voyageBackfillJob — nightly + on-demand Voyage AI embedding backfill
+export { five9IndexJob, voyageBackfillJob } from "./legal-jobs.js";
+import { five9IndexJob, voyageBackfillJob } from "./legal-jobs.js";
+
 // Export all functions for the Inngest serve handler
 // inngestRoutes.ts imports this array and passes it to serve()
 export const inngestFunctions = [
@@ -416,4 +422,7 @@ export const inngestFunctions = [
   researchJob,
   summaryJob,
   deadlineSweep,
+  // Turn 7 — legal pipeline
+  five9IndexJob,
+  voyageBackfillJob,
 ];
