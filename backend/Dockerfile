@@ -5,7 +5,7 @@ WORKDIR /app
 
 # Install deps first (layer cache)
 COPY package*.json ./
-RUN npm ci --ignore-scripts
+RUN npm install --ignore-scripts
 
 # Copy source and compile
 COPY tsconfig.json ./
@@ -21,7 +21,7 @@ ENV NODE_ENV=production
 
 # Production deps only
 COPY package*.json ./
-RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+RUN npm install --omit=dev --ignore-scripts && npm cache clean --force
 
 # Compiled output from builder
 COPY --from=builder /app/dist ./dist
