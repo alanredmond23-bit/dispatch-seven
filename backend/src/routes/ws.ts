@@ -28,6 +28,10 @@ import { budgetOverrides } from "../lib/session-store.js";
 const ANTHROPIC_URL    = "https://api.anthropic.com/v1/messages";
 const PING_INTERVAL_MS = 30_000;
 const PONG_TIMEOUT_MS  = 10_000;
+// P0-1: Set WS_AUTH_DISABLED=true in local dev to bypass token check.
+// In production, every WS upgrade must carry Authorization: Bearer <token>
+// or a ?token= query param. Any non-empty token is accepted (JWT tightening pending).
+const WS_AUTH_DISABLED = process.env.WS_AUTH_DISABLED === "true";
 
 // ── BUDGET CAP ───────────────────────────────────────────────────────────────
 // Per-session hard cap. Set BUDGET_CAP_USD in env; default $1.00.
@@ -37,6 +41,7 @@ const BUDGET_CAP_USD = parseFloat(process.env.BUDGET_CAP_USD ?? "1.00");
 /**
  * checkBudget — returns the current session spend.
  * Throws if BUDGET_CAP_USD is exceeded.
+ * P1-5: Fails CLOSED by default. Set BUDGET_FAIL_OPEN=true to revert to old behaviour.
  */
 async function checkBudget(sessionId: string): Promise<void> {
   const { data, error } = await supabase
@@ -45,8 +50,12 @@ async function checkBudget(sessionId: string): Promise<void> {
     .eq("session_id", sessionId);
 
   if (error) {
-    // Supabase unavailable — fail open (do not block the request)
-    console.warn(`[budget] query failed for session=${sessionId}: ${error.message}`);
+    // P1-5: fail closed — Supabase down = no budget data = deny by default.
+    // Set BUDGET_FAIL_OPEN=true to restore old fail-open behaviour.
+    if (process.env.BUDGET_FAIL_OPEN !== "true") {
+      throw new Error(`Budget check failed (Supabase error): ${error.message}`);
+    }
+    console.warn(`[budget] query failed for session=${sessionId}: ${error.message} — failing open`);
     return;
   }
 
@@ -75,11 +84,17 @@ async function buildCitationBlock(fullText: string): Promise<string> {
     return "\n\n---\n**CITATIONS**\n⚠️ No citations extracted — legal claims should be verified manually.";
   }
 
-  // Verify all citations in parallel with 3s timeout each
+  // P2-6: Verify all citations in parallel with individual try/catch per citation.
+  // A single bad URL must not kill the entire citation block.
   const verified = await Promise.all(
     citations.map(async (c) => {
-      const result = await verifyCitation(c.citation);
-      return { ...c, ...result };
+      try {
+        const result = await verifyCitation(c.citation);
+        return { ...c, ...result };
+      } catch {
+        // Non-fatal: mark as unverified but continue with other citations
+        return { ...c, verified: false, url: undefined };
+      }
     })
   );
 
@@ -96,6 +111,7 @@ async function buildCitationBlock(fullText: string): Promise<string> {
 // Stream Claude tokens, calling onToken per chunk.
 // Returns { input_tokens, output_tokens, fullResponse } captured from SSE events.
 // systemPrompt: prepended context (mem0 injection, legal system prompt, etc.)
+// P1-6: AbortController enforces a 120s hard timeout on the Anthropic fetch.
 async function streamClaude(
   content: string,
   onToken: (tok: string) => void,
@@ -117,15 +133,25 @@ async function streamClaude(
     body.system = systemPrompt;
   }
 
-  const res = await fetch(ANTHROPIC_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type":      "application/json",
-      "x-api-key":         apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify(body),
-  });
+  // P1-6: 120s timeout — Anthropic hangs occasionally; don't let WS hang forever
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+
+  let res: Response;
+  try {
+    res = await fetch(ANTHROPIC_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type":      "application/json",
+        "x-api-key":         apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!res.ok) {
     const err = await res.text();
@@ -177,8 +203,26 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
     let pingTimer: ReturnType<typeof setInterval> | null = null;
     let pongTimer: ReturnType<typeof setTimeout>  | null = null;
 
+    // P0-1: Bearer token auth for WebSocket upgrades.
+    // Accept token from Authorization header ("Bearer <token>") or ?token= query param.
+    // Any non-empty token is accepted for now; will tighten to JWT signature check later.
+    // Bypass with WS_AUTH_DISABLED=true for local dev.
+    const authHeader  = c.req.header("Authorization") ?? "";
+    const tokenFromQuery = c.req.query("token") ?? "";
+    const bearerToken = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7).trim()
+      : tokenFromQuery.trim();
+    const isAuthed = WS_AUTH_DISABLED || bearerToken.length > 0;
+
     return {
       onOpen(_evt, ws) {
+        // P0-1: Reject unauthenticated connections immediately after upgrade.
+        // 1008 = Policy Violation (standard code for auth failures on WS)
+        if (!isAuthed) {
+          ws.close(1008, "Unauthorized");
+          return;
+        }
+
         console.log(`[WS] open session=${sessionId}`);
 
         pingTimer = setInterval(() => {
@@ -264,8 +308,11 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
             ws.close(1008, "budget cap reached");
             return;
           }
-          // Any other budget-check error: fail open, log, continue
-          console.error("[budget] unexpected error:", err);
+          // P1-5: Any other budget-check error (e.g. Supabase down) now fails closed.
+          // Re-throw so the outer catch handles it and closes the connection.
+          const message = err instanceof Error ? err.message : String(err);
+          ws.send(JSON.stringify({ type: "error", message }));
+          return;
         }
 
         // ── LANGFUSE TRACE SETUP ────────────────────────────────────────────
@@ -317,23 +364,24 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
 
           // Detect orchestrator routing JSON { "agent": "...", "task": "...", "priority": "..." }
           // and emit a spawn_task action so agent routing is visible in the ActionsPanel.
-          // Ponytail: single regex, fire-and-forget — never blocks WS response.
+          // P2-8: replaced self-referencing loopback HTTP with direct Supabase insert.
+          // Loopback `fetch('http://localhost:PORT/api/v1/actions')` was brittle during
+          // startup and added unnecessary latency; direct DB insert is simpler and faster.
           try {
             const routeMatch = fullResponse.match(
               /\{[^{}]*"agent"\s*:\s*"([A-Z]+)"[^{}]*"task"\s*:\s*"([^"]+)"[^{}]*\}/
             );
             if (routeMatch) {
-              const backendBase = `http://localhost:${process.env.PORT ?? "3001"}`;
-              fetch(`${backendBase}/api/v1/actions`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
+              // Direct insert — no HTTP round-trip to self
+              supabase
+                .from("actions")
+                .insert({
                   session_id: sid,
-                  agent: "ORCHESTRATOR",
-                  type:  "spawn_task",
-                  payload: { target_agent: routeMatch[1], task_title: routeMatch[2] },
-                }),
-              }).catch(() => {/* non-fatal */});
+                  agent:      "ORCHESTRATOR",
+                  type:       "spawn_task",
+                  payload:    { target_agent: routeMatch[1], task_title: routeMatch[2] },
+                })
+                .then(undefined, () => {/* non-fatal */});
             }
           } catch {
             // non-fatal — routing detection must not crash WS handler

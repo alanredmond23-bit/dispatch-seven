@@ -2,7 +2,7 @@
 // GET  /api/v1/runs?session_id=X          — last 50 runs for session (omit = all)
 // GET  /api/v1/runs/summary?session_id=X  — session + daily cost summary for CostBar
 // POST /api/v1/runs/track                 — frontend reports usage after a Claude call
-// POST /api/v1/runs/override-budget       — sets budget override flag for session
+// POST /api/v1/runs/override-budget       — sets budget override flag for session (AUTH REQUIRED)
 // GET  /api/v1/runs/task-graph            — session task graph for TaskGraph component
 
 import { Hono } from "hono";
@@ -127,7 +127,21 @@ runsRoutes.post("/track", async (c) => {
 // POST /api/v1/runs/override-budget
 // Body: { session_id: string }
 // Sets in-memory override so ws.ts budget check allows overage for this session.
+// P0-3: Requires Authorization: Bearer matching API_BEARER_TOKEN.
+// This endpoint directly controls the budget guard — must not be publicly accessible.
 runsRoutes.post("/override-budget", async (c) => {
+  const apiToken = process.env.API_BEARER_TOKEN;
+  if (!apiToken) {
+    return c.json({ error: "Server misconfigured: API_BEARER_TOKEN not set" }, 503);
+  }
+
+  const authHeader = c.req.header("Authorization") ?? "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+
+  if (!token || token !== apiToken) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
   const body = await c.req.json<{ session_id: string }>();
   if (!body?.session_id) return c.json({ error: "session_id required" }, 400);
   budgetOverrides.add(body.session_id);
