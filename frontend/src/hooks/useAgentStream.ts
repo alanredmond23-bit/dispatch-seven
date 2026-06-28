@@ -52,6 +52,11 @@ export interface AgentMessage {
   run_id?: string; // set from Supabase recovery for dedup
 }
 
+export interface RouteInfo {
+  agent: string;
+  model: string;
+}
+
 export interface UseAgentStreamReturn {
   send:              (content: string) => void;
   messages:          AgentMessage[];
@@ -64,6 +69,8 @@ export interface UseAgentStreamReturn {
   isTyping:      boolean;
   wsStatus:      "connecting" | "open" | "closed" | "error";
   clearMessages: () => void;
+  /** Active route: which agent + model is handling current stream */
+  routeInfo:   RouteInfo | null;
   isPolling:     boolean; // true when operating on poll fallback
 }
 
@@ -71,6 +78,9 @@ export interface UseAgentStreamReturn {
 const WS_SILENCE_THRESHOLD_MS = 3_000; // WS must be silent this long before poll activates
 const POLL_INTERVAL_MS        = 2_000; // how often to query /api/v1/runs in fallback mode
 
+  const [messages,  setMessages]  = useState<AgentMessage[]>([]);
+  const [isTyping,  setIsTyping]  = useState(false);
+  const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
 // Backend route that proxies dispatch7.agent_runs for the frontend
 const RUNS_ENDPOINT = (sid: string) =>
   `/api/v1/runs?session_id=${encodeURIComponent(sid)}&status=streaming&limit=1`;
@@ -185,6 +195,9 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
   // Process raw WS messages
   useEffect(() => {
     for (const raw of rawMessages) {
+      if (raw.type === "route" && raw.agent) {
+        setRouteInfo({ agent: raw.agent, model: raw.model ?? "" });
+      } else if (raw.type === "token" && raw.content !== undefined) {
       lastMsgRef.current = Date.now();  // reset silence timer on any WS message
   // ── PROCESS WS MESSAGES ───────────────────────────────────────────────────
   // Process raw WS messages as they arrive
@@ -221,6 +234,7 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
         );
         activeIdRef.current = null;
         setIsTyping(false);
+        setRouteInfo(null);
       } else if (raw.type === "error") {
         if (rafRef.current !== null) {
           cancelAnimationFrame(rafRef.current);
@@ -235,6 +249,7 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
         );
         activeIdRef.current = null;
         setIsTyping(false);
+        setRouteInfo(null);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -321,11 +336,12 @@ export function useAgentStream(sessionId: string): UseAgentStreamReturn {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     setIsTyping(false);
-    setIsPolling(false);
+    setRouteInfo(null);
   }, []);
 
+  return { send, messages, isTyping, wsStatus, clearMessages, routeInfo };
+    setIsPolling(false);
   void reconnecting; // consumed via reconnectAttempts from useWebSocket
-
   return { send, messages, isTyping, wsStatus, reconnectAttempts, clearMessages };
   return { send, messages, isTyping, wsStatus, clearMessages, isPolling };
   return { send, messages, isTyping, wsStatus, clearMessages };
