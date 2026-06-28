@@ -1,12 +1,13 @@
-// POST /api/decompose
-// Body: { goal: string, budget_usd?: number }
-// Calls Claude via decomposer agent → inserts project, tasks, task_graph edges
-// Returns: { project_id, project_title, tasks: [{id, title, agent, priority, depends_on:[]}] }
+// decompose.ts — two decompose endpoints:
+//   POST /api/decompose      — original project DAG decomposer (existing, untouched)
+//   POST /api/v1/decompose   — session-scoped Haiku pre-planner for CostBar/TaskGraph UI
+//   (both are exported; index.ts mounts them at different paths)
 
 import { Hono } from "hono";
 import { supabase } from "../lib/supabase.js";
 import { decompose } from "../../../agents/decomposer.js";
 
+// ── ORIGINAL ROUTE — /api/decompose ─────────────────────────────────────────
 export const decomposeRoutes = new Hono();
 
 decomposeRoutes.post("/", async (c) => {
@@ -15,7 +16,6 @@ decomposeRoutes.post("/", async (c) => {
 
   if (!goal?.trim()) return c.json({ error: "goal is required" }, 400);
 
-  // 1. Call Claude → parsed plan (with built-in retry on invalid JSON)
   let plan;
   try {
     plan = await decompose(goal);
@@ -24,7 +24,6 @@ decomposeRoutes.post("/", async (c) => {
     return c.json({ error: `Decomposition failed: ${msg}` }, 502);
   }
 
-  // 2. Insert project row
   const { data: project, error: projErr } = await supabase
     .from("projects")
     .insert({
@@ -41,7 +40,6 @@ decomposeRoutes.post("/", async (c) => {
     return c.json({ error: projErr?.message ?? "project insert failed" }, 500);
   }
 
-  // 3. Insert task rows — collect ids in order so we can build graph edges
   const taskInserts = plan.tasks.map((t) => ({
     project_id: project.id,
     title: t.title,
@@ -60,7 +58,6 @@ decomposeRoutes.post("/", async (c) => {
     return c.json({ error: taskErr?.message ?? "task insert failed" }, 500);
   }
 
-  // 4. Build task_graph edges from depends_on_indices
   const edges: Array<{ task_id: string; depends_on: string }> = [];
   plan.tasks.forEach((t, idx) => {
     for (const depIdx of t.depends_on_indices ?? []) {
@@ -78,7 +75,6 @@ decomposeRoutes.post("/", async (c) => {
     if (graphErr) return c.json({ error: graphErr.message }, 500);
   }
 
-  // 5. Assemble response — include depends_on uuid arrays for orchestrator
   const idByIndex = insertedTasks.map((t) => t.id);
   const tasks = insertedTasks.map((t, idx) => ({
     ...t,
@@ -86,4 +82,112 @@ decomposeRoutes.post("/", async (c) => {
   }));
 
   return c.json({ project_id: project.id, project_title: project.title, tasks }, 201);
+});
+
+// ── SESSION-SCOPED ROUTE — /api/v1/decompose ─────────────────────────────────
+// POST { session_id, goal } → Haiku decomposes → stores tasks with payload.session_id
+// Returns task graph the UI renders immediately.
+export const v1DecomposeRoutes = new Hono();
+
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+
+const DECOMPOSE_SYSTEM = `Decompose this goal into 3-7 concrete subtasks.
+Return ONLY valid JSON array, no markdown, no explanation:
+[{"id":"t1","title":"...","agent":"ORCHESTRATOR","dependencies":[],"estimated_cost_usd":0.002}]
+Agents available: ORCHESTRATOR, LEGAL, CODE, RESEARCH, SCHEDULER.
+Keep tasks atomic and executable. Assign realistic cost estimates (Haiku ~$0.001, Sonnet ~$0.005 per task).
+dependencies: array of id strings this task must wait for. First tasks have [].`.trim();
+
+interface HaikuTask {
+  id: string;
+  title: string;
+  agent: string;
+  dependencies: string[];
+  estimated_cost_usd: number;
+}
+
+async function callHaiku(goal: string): Promise<HaikuTask[]> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
+
+  const res = await fetch(ANTHROPIC_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type":      "application/json",
+      "x-api-key":         apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model:      "claude-haiku-4-5-20251001",
+      max_tokens: 800,
+      system:     DECOMPOSE_SYSTEM,
+      messages:   [{ role: "user", content: goal }],
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Anthropic API ${res.status}: ${err}`);
+  }
+
+  const data = await res.json() as {
+    content: Array<{ type: string; text: string }>;
+  };
+  const text = data.content.find((b) => b.type === "text")?.text ?? "[]";
+  // Strip accidental markdown fences
+  const cleaned = text.replace(/```json|```/g, "").trim();
+  return JSON.parse(cleaned) as HaikuTask[];
+}
+
+v1DecomposeRoutes.post("/", async (c) => {
+  const body = await c.req.json<{ session_id: string; goal: string }>();
+  const { session_id, goal } = body;
+  if (!goal?.trim())     return c.json({ error: "goal is required" }, 400);
+  if (!session_id)       return c.json({ error: "session_id is required" }, 400);
+
+  let haikuTasks: HaikuTask[];
+  try {
+    haikuTasks = await callHaiku(goal);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: `Haiku decomposition failed: ${msg}` }, 502);
+  }
+
+  // Store tasks in dispatch7.tasks with payload carrying session metadata
+  // so GET /api/v1/runs/task-graph?session_id=X can retrieve them cheaply.
+  const taskInserts = haikuTasks.map((t) => ({
+    title:  t.title,
+    agent:  t.agent,
+    status: "pending",
+    // project_id left null — these are session-scoped planning tasks, not project tasks
+    payload: {
+      session_id,
+      haiku_id:          t.id,
+      dependencies:      t.dependencies,
+      estimated_cost_usd: t.estimated_cost_usd,
+    },
+  }));
+
+  const { data: inserted, error: insertErr } = await supabase
+    .from("tasks")
+    .insert(taskInserts)
+    .select("id, title, agent, status, payload");
+
+  if (insertErr) {
+    // Non-fatal — return haiku tasks even if DB insert fails (client still renders)
+    console.error("[v1/decompose] DB insert failed:", insertErr.message);
+    return c.json({ tasks: haikuTasks, persisted: false }, 201);
+  }
+
+  // Reshape to match what TaskGraph expects
+  const tasks = (inserted ?? []).map((row) => ({
+    id:                 row.id,
+    title:              row.title,
+    agent:              row.agent,
+    status:             row.status,
+    dependencies:       row.payload?.dependencies ?? [],
+    estimated_cost_usd: row.payload?.estimated_cost_usd ?? null,
+  }));
+
+  return c.json({ tasks, persisted: true }, 201);
 });

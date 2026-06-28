@@ -1,13 +1,16 @@
 {
-  "name": "D7 Dispatch Seven",
+  "name": "Dispatch Seven",
   "short_name": "D7",
-  "description": "D7 Command — 12-Agent AI Operating System",
+  "description": "D7 Command \u2014 12-Agent AI Operating System",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#050810",
-  "theme_color": "#050810",
+  "theme_color": "#1d4ed8",
   "orientation": "portrait",
-  "categories": ["productivity", "utilities"],
+  "categories": [
+    "productivity",
+    "utilities"
+  ],
   "icons": [
     {
       "src": "/icon-192.png",
@@ -28,14 +31,24 @@
       "short_name": "Capture",
       "description": "Create a new task",
       "url": "/?tab=capture",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+      "icons": [
+        {
+          "src": "/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
     },
     {
       "name": "Today's Schedule",
       "short_name": "Today",
       "description": "View today's AI schedule",
       "url": "/?tab=today",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+      "icons": [
+        {
+          "src": "/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
     }
   ]
 }

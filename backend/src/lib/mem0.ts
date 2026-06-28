@@ -1,9 +1,14 @@
 // Mem0 cloud memory client — cross-session context for Claude
 // userId = session_id until auth is wired; swap to real user_id after.
 // All functions: fire-and-forget safe. Mem0 down = silent pass-through.
+//
+// Voyage AI embeddings (voyage-3-lite, 1024-dim) are generated for every
+// assistant turn and stored to dispatch7.memory so pgvector similarity
+// search can work independently of Mem0 availability.
 
 import MemoryClient from "mem0ai";
 import { supabase } from "./supabase.js";
+import { embedText } from "./voyage.js";
 
 const TIMEOUT_MS = 2000;
 
@@ -36,16 +41,28 @@ export async function addMemory(
     })()
   ).catch(() => {/* Mem0 down — silent */});
 
-  // Also sync assistant turn to Supabase audit trail
+  // Sync assistant turn to Supabase dispatch7.memory with Voyage embedding.
+  // Embedding is generated async and degraded gracefully if Voyage is unavailable.
   const assistantMsg = messages.find((m) => m.role === "assistant");
   if (assistantMsg) {
+    const snippet = assistantMsg.content.slice(0, 500);
+
+    // Generate Voyage embedding — silently skip if key missing or API down
+    let embedding: number[] | null = null;
+    try {
+      embedding = await embedText(snippet);
+    } catch {
+      // VOYAGE_API_KEY not set or API unreachable — store row without vector
+    }
+
     supabase
       .schema("dispatch7")
       .from("memory")
       .insert({
         session_id: userId,
-        content: assistantMsg.content.slice(0, 500),
-        metadata: { role: "assistant", via: "mem0" },
+        content: snippet,
+        ...(embedding ? { embedding } : {}),
+        metadata: { role: "assistant", via: "mem0", model: "voyage-3-lite" },
       })
       .then(() => {/* ignore */})
       .catch(() => {/* Supabase down — silent */});
