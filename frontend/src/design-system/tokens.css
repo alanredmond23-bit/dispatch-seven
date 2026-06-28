@@ -1,0 +1,169 @@
+/* ============================================================
+   D7 DESIGN SYSTEM — TOKENS
+   Single source of truth for all design decisions.
+   Import this before any component CSS.
+   Every component MUST use these vars — no hardcoded values.
+   ============================================================ */
+
+:root {
+  /* ── BACKGROUND LAYERS ──────────────────────────────────── */
+  --d7-bg:           #0A0A0F;   /* page background: near-black, not pure */
+  --d7-surface:      #111118;   /* cards, panels, inputs */
+  --d7-surface-2:    #16161F;   /* elevated surfaces, dropdowns */
+  --d7-surface-3:    #1C1C28;   /* hover states on surfaces */
+
+  /* ── BORDERS ────────────────────────────────────────────── */
+  --d7-border:       #1E1E2E;   /* default separator */
+  --d7-border-2:     #2A2A3E;   /* slightly more visible */
+  --d7-border-focus: #5B6EF5;   /* focused input ring */
+
+  /* ── ACCENT (D7 brand blue-purple) ──────────────────────── */
+  --d7-accent:       #5B6EF5;   /* primary CTA, active states */
+  --d7-accent-hover: #7B8EFF;   /* hover */
+  --d7-accent-muted: #2A3080;   /* subtle accent bg */
+  --d7-accent-glow:  rgba(91, 110, 245, 0.15); /* ambient glow */
+
+  /* ── SEMANTIC ────────────────────────────────────────────── */
+  --d7-success:      #22C55E;
+  --d7-success-muted:#0D3320;
+  --d7-warning:      #F59E0B;
+  --d7-warning-muted:#3D2600;
+  --d7-error:        #EF4444;
+  --d7-error-muted:  #3D0A0A;
+  --d7-legal:        #DC2626;   /* RED ZONE — legal highlight */
+  --d7-legal-muted:  #2D0000;
+
+  /* ── AGENT DOMAIN COLORS ────────────────────────────────── */
+  --d7-agent-legal:        #DC2626;
+  --d7-agent-code:         #5B6EF5;
+  --d7-agent-research:     #22C55E;
+  --d7-agent-orchestrator: #F59E0B;
+
+  /* ── TEXT ────────────────────────────────────────────────── */
+  --d7-text:         #F0F0F6;   /* primary */
+  --d7-text-2:       #8888AA;   /* secondary */
+  --d7-text-muted:   #55557A;   /* muted / disabled */
+  --d7-text-inverse: #0A0A0F;   /* on light backgrounds */
+
+  /* ── TYPOGRAPHY ──────────────────────────────────────────── */
+  --d7-font-sans:  'Geist', 'Inter', system-ui, -apple-system, sans-serif;
+  --d7-font-mono:  'Geist Mono', 'JetBrains Mono', 'Fira Code', monospace;
+
+  --d7-text-xs:    12px;
+  --d7-text-sm:    13px;
+  --d7-text-base:  14px;
+  --d7-text-md:    16px;
+  --d7-text-lg:    18px;
+  --d7-text-xl:    24px;
+  --d7-text-2xl:   32px;
+
+  --d7-weight-normal:   400;
+  --d7-weight-medium:   500;
+  --d7-weight-semibold: 600;
+  --d7-weight-bold:     700;
+
+  --d7-leading-tight:  1.2;
+  --d7-leading-snug:   1.4;
+  --d7-leading-normal: 1.6;
+
+  --d7-tracking-tight:  -0.01em;
+  --d7-tracking-normal:  0;
+  --d7-tracking-wide:    0.05em;
+  --d7-tracking-wider:   0.1em;
+  --d7-tracking-widest:  0.18em;
+
+  /* ── SPACING (4px base grid) ─────────────────────────────── */
+  --d7-space-1:   4px;
+  --d7-space-2:   8px;
+  --d7-space-3:   12px;
+  --d7-space-4:   16px;
+  --d7-space-5:   20px;
+  --d7-space-6:   24px;
+  --d7-space-8:   32px;
+  --d7-space-10:  40px;
+  --d7-space-12:  48px;
+  --d7-space-16:  64px;
+
+  /* ── BORDER RADIUS ───────────────────────────────────────── */
+  --d7-radius-sm:  4px;
+  --d7-radius:     6px;
+  --d7-radius-md:  8px;
+  --d7-radius-lg:  12px;
+  --d7-radius-full: 9999px;
+
+  /* ── SHADOWS ─────────────────────────────────────────────── */
+  --d7-shadow-sm:  0 1px 2px rgba(0,0,0,0.4);
+  --d7-shadow:     0 4px 12px rgba(0,0,0,0.5);
+  --d7-shadow-lg:  0 12px 32px rgba(0,0,0,0.6);
+  --d7-shadow-accent: 0 0 0 1px var(--d7-border-focus), 0 0 12px var(--d7-accent-glow);
+
+  /* ── Z-INDEX SCALE ───────────────────────────────────────── */
+  --d7-z-base:    0;
+  --d7-z-above:   10;
+  --d7-z-sticky:  100;
+  --d7-z-overlay: 1000;
+  --d7-z-toast:   2000;
+
+  /* ── ANIMATION ───────────────────────────────────────────── */
+  --d7-duration-fast:   100ms;
+  --d7-duration-base:   180ms;
+  --d7-duration-slow:   300ms;
+  --d7-ease:            cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ── COMPONENT SIZES ─────────────────────────────────────── */
+  --d7-header-height:   56px;
+  --d7-nav-height:      56px;
+  --d7-badge-height:    20px;
+  --d7-input-height:    36px;
+  --d7-btn-height:      34px;
+  --d7-btn-height-sm:   28px;
+  --d7-btn-height-lg:   42px;
+
+  /* ── COST BAR ────────────────────────────────────────────── */
+  --d7-cost-height:  4px;
+  --d7-cost-gradient: linear-gradient(90deg, var(--d7-success) 0%, var(--d7-warning) 60%, var(--d7-error) 100%);
+
+  /* ── TASK STATUS COLORS ──────────────────────────────────── */
+  --d7-task-pending:  #444455;
+  --d7-task-running:  var(--d7-accent);
+  --d7-task-done:     var(--d7-success);
+  --d7-task-failed:   var(--d7-error);
+}
+
+/* ── GEIST FONT IMPORT ───────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
+
+/* ── BASE RESET ──────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+}
+
+body {
+  background: var(--d7-bg);
+  color: var(--d7-text);
+  font-family: var(--d7-font-sans);
+  font-size: var(--d7-text-base);
+  font-weight: var(--d7-weight-normal);
+  line-height: var(--d7-leading-normal);
+}
+
+/* ── SCROLLBAR ───────────────────────────────────────────── */
+::-webkit-scrollbar        { width: 6px; height: 6px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: var(--d7-border-2); border-radius: var(--d7-radius-full); }
+::-webkit-scrollbar-thumb:hover { background: var(--d7-text-muted); }
+
+/* ── SELECTION ───────────────────────────────────────────── */
+::selection {
+  background: var(--d7-accent-muted);
+  color: var(--d7-text);
+}

@@ -1,0 +1,94 @@
+/* ============================================================
+   D7 — GLOBAL STYLESHEET
+   Import order matters: tokens first, then components.
+   ============================================================ */
+
+@import "./design-system/tokens.css";
+@import "./design-system/components.css";
+
+/* ── PAGE SHELL ──────────────────────────────────────────── */
+#root {
+  min-height: 100vh;
+  background: var(--d7-bg);
+  color: var(--d7-text);
+  font-family: var(--d7-font-sans);
+}
+
+/* ── FOCUS VISIBLE ───────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--d7-border-focus);
+  outline-offset: 2px;
+}
+
+/* ── LINK BASE ───────────────────────────────────────────── */
+a {
+  color: var(--d7-accent);
+  text-decoration: none;
+  transition: color var(--d7-duration-fast) var(--d7-ease);
+}
+
+a:hover {
+  color: var(--d7-accent-hover);
+  text-decoration: underline;
+/* ── D7 DESIGN TOKENS ──────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;700&display=swap');
+:root {
+  /* Spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
+  /* Font sizes */
+  --text-sm:   12px;
+  --text-base: 14px;
+  --text-lg:   16px;
+  --text-xl:   20px;
+  /* Light mode vars (unused in current dark-first UI, ready for swap) */
+  --bg:      #050810;
+  --surface: #090e1a;
+  --border:  #1a2540;
+  --text:    #e2e8f0;
+  --muted:   #4a5568;
+  --accent:  #1d4ed8;
+/* Dark mode class on <html> swaps vars */
+html.dark {
+  --bg:      #050810;
+  --surface: #090e1a;
+  --border:  #1a2540;
+  --text:    #e2e8f0;
+  --muted:   #4a5568;
+/* Light mode (opt-in via html:not(.dark)) */
+html:not(.dark) {
+  --bg:      #f8fafc;
+  --surface: #ffffff;
+  --border:  #e2e8f0;
+  --text:    #0f172a;
+  --muted:   #64748b;
+/* ── GLOBAL RESET ───────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  font-size: var(--text-base);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+/* ── MESSAGE LIST ───────────────────────────────────────────────── */
+.message-list { line-height: 1.6; }
+/* ── INPUT AREA ─────────────────────────────────────────────────── */
+.input-area {
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  transition: border-color 0.15s;
+.input-area:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.15);
+/* ── HEADER ─────────────────────────────────────────────────────── */
+.app-header {
+  height: 56px;
+  border-bottom: 1px solid var(--border);
+}

@@ -11,7 +11,7 @@ import { agentRoutes } from "./routes/agents.js";
 import { taskRoutes } from "./routes/tasks.js";
 import { memoryRoutes } from "./routes/memory.js";
 import { actionRoutes } from "./routes/actions.js";
-import { decomposeRoutes } from "./routes/decompose.js";
+import { decomposeRoutes, v1DecomposeRoutes } from "./routes/decompose.js";
 import { buildWsHandler } from "./routes/ws.js";
 import { runsRoutes } from "./routes/runs.js";
 import { inngestRoutes } from "./routes/inngest.js";   // S3: Inngest event endpoint
@@ -33,10 +33,11 @@ app.route("/api/v1/agents", agentRoutes);
 app.route("/api/v1/tasks", taskRoutes);
 app.route("/api/v1/memory", memoryRoutes);
 app.route("/api/v1/actions", actionRoutes);
-app.route("/api/decompose", decomposeRoutes); // goal → DAG → dispatch7 tables
-app.route("/api/v1/runs", runsRoutes);        // cost dashboard + usage tracking
-app.route("/api/inngest", inngestRoutes);     // S3: Inngest webhook (event delivery)
-app.route("/api/copilot", copilotRoutes);     // S3: CopilotKit action runtime
+app.route("/api/decompose", decomposeRoutes);      // original project DAG decomposer
+app.route("/api/v1/decompose", v1DecomposeRoutes); // T4: session-scoped Haiku pre-planner
+app.route("/api/v1/runs", runsRoutes);             // cost dashboard + usage tracking + task-graph
+app.route("/api/inngest", inngestRoutes);           // S3: Inngest webhook (event delivery)
+app.route("/api/copilot", copilotRoutes);           // S3: CopilotKit action runtime
 
 // WebSocket — must init before serve() so injectWebSocket can attach to the server
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
