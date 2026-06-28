@@ -85,8 +85,7 @@ export async function syncDocketToGitHub(): Promise<SyncResult> {
           `**Auto-created by:** D7 SCHEDULER agent`,
           ``,
           `> ⚖ Fifth Amendment reservation applies to all production-related entries.`,
-        ].join("
-"),
+        ].join("\n"),
       });
 
       result.created.push(`#${(issue as { number: number }).number} ECF ${entry.document_number}`);
