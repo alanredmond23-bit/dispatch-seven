@@ -16,11 +16,12 @@ jobs:
         run: |
           az acr build \
             --registry ${{ secrets.ACR_NAME }} \
-            --image dispatch7-backend:${{ github.sha }} \
+            --image dispatch-seven-api:${{ github.sha }} \
             ./backend
       - name: Deploy to ACA
         run: |
           az containerapp update \
-            --name dispatch7-backend \
+            --name dispatch-seven-api \
             --resource-group menagerie-rg \
-            --image ${{ secrets.ACR_NAME }}.azurecr.io/dispatch7-backend:${{ github.sha }}
+            --image ${{ secrets.ACR_NAME }}.azurecr.io/dispatch-seven-api:${{ github.sha }} \
+            --set-env-vars PORT=3000
