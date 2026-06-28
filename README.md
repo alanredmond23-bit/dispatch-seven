@@ -54,3 +54,27 @@
 
 ---
 *Built by Digital Principles Corp (EIN 87-1484306)*
+
+## Railway Deployment
+
+D7 backend deploys to [Railway](https://railway.app) via Docker.
+
+### Steps
+
+```bash
+# 1. Install Railway CLI
+npm install -g @railway/cli
+
+# 2. Login
+railway login
+
+# 3. Link to your Railway project (run from repo root)
+railway link
+
+# 4. Deploy
+railway up
+```
+
+Environment variables are set in the Railway dashboard — never committed to source. Required vars mirror `.env.example`.
+
+CI auto-deploys on every push to `main` via `.github/workflows/railway.yml` using the `RAILWAY_TOKEN` secret.
