@@ -21,6 +21,17 @@
   </head>
   <body>
     <div id="root"></div>
+    <div id="fallback" style="position:fixed;inset:0;background:#050810;color:#e2e8f0;font-family:monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:-1">
+      <div style="font-size:24px;color:#1d4ed8;letter-spacing:.2em">D7</div>
+      <div style="font-size:11px;color:#4a5568;letter-spacing:.15em">LOADING...</div>
+    </div>
+    <script>
+      // Hide fallback once React mounts
+      window.__d7_hide_fallback = function() {
+        var f = document.getElementById('fallback');
+        if (f) f.style.display = 'none';
+      };
+    </script>
     <script type="module" src="/src/main.tsx"></script>
     <script>
       // Unregister any old service workers to prevent stale cache issues
