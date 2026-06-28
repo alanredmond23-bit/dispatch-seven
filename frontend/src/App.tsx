@@ -594,8 +594,7 @@ function DeadlinesTab() {
 }
 
 // ── HEADER ────────────────────────────────────────────────────────────────────
-function Header({ issueCount, trialDays, onRefresh, loading, sessionId, dailyTotal }) {
-function Header({ issueCount, trialDays, onRefresh, loading, sessionId, wsStatus = "open", reconnectAttempts = 0 }) {
+function Header({ issueCount, trialDays, onRefresh, loading, sessionId, wsStatus = "open", reconnectAttempts = 0, dailyTotal = null }) {
   return (
     <div style={{ background:T.bg, borderBottom:`1px solid ${T.border}`, padding:"12px 16px", display:"flex", justifyContent:"space-between", alignItems:"center", position:"sticky", top:0, zIndex:10 }}>
       <div style={{ display:"flex", alignItems:"center", gap:"10px" }}>
@@ -785,8 +784,6 @@ export default function App() {
         </div>
       )}
       <Header issueCount={issues.length} trialDays={trialDays} onRefresh={() => fetchIssues()} loading={loading} sessionId={sessionId} wsStatus={wsStatus} reconnectAttempts={reconnectAttempts} />
-      <SetupWizard />
-      <Header issueCount={issues.length} trialDays={trialDays} onRefresh={() => fetchIssues()} loading={loading} sessionId={sessionId} />
 
       {tab === "today"     && <TodayTab     issues={issues} sessionId={sessionId} />}
       {tab === "board"     && <BoardTab     issues={issues} onDone={markDone} loading={loading} />}

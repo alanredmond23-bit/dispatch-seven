@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;700&display=swap');
 /* ============================================================
    D7 — GLOBAL STYLESHEET
    Import order matters: tokens first, then components.
@@ -30,8 +31,8 @@ a {
 a:hover {
   color: var(--d7-accent-hover);
   text-decoration: underline;
+}
 /* ── D7 DESIGN TOKENS ──────────────────────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;700&display=swap');
 :root {
   /* Spacing scale */
   --space-1: 4px;
@@ -54,6 +55,7 @@ a:hover {
   --text:    #e2e8f0;
   --muted:   #4a5568;
   --accent:  #1d4ed8;
+}
 /* Dark mode class on <html> swaps vars */
 html.dark {
   --bg:      #050810;
@@ -61,6 +63,7 @@ html.dark {
   --border:  #1a2540;
   --text:    #e2e8f0;
   --muted:   #4a5568;
+}
 /* Light mode (opt-in via html:not(.dark)) */
 html:not(.dark) {
   --bg:      #f8fafc;
@@ -68,6 +71,7 @@ html:not(.dark) {
   --border:  #e2e8f0;
   --text:    #0f172a;
   --muted:   #64748b;
+}
 /* ── GLOBAL RESET ───────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -77,6 +81,7 @@ body {
   font-size: var(--text-base);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+}
 /* ── MESSAGE LIST ───────────────────────────────────────────────── */
 .message-list { line-height: 1.6; }
 /* ── INPUT AREA ─────────────────────────────────────────────────── */
@@ -84,9 +89,11 @@ body {
   border-radius: 12px;
   border: 1px solid var(--border);
   transition: border-color 0.15s;
+}
 .input-area:focus-within {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.15);
+}
 /* ── HEADER ─────────────────────────────────────────────────────── */
 .app-header {
   height: 56px;
