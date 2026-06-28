@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { generateScheduleViaWs } from "./lib/wsSchedule";
 import CitationBlock, { parseMessageCitations } from "./components/CitationBlock";
+import { DesignSystem } from "./pages/DesignSystem";
+import "./index.css";
+
 
 // ── CONFIG ───────────────────────────────────────────────────────────────────
 const OWNER = "alanredmond23-bit";
@@ -634,6 +637,12 @@ function BottomNav({ tab, setTab, p0Count }) {
 
 // ── ROOT APP ─────────────────────────────────────────────────────────────────
 export default function App() {
+
+  // DEV-only: route /design to design system preview
+  if (import.meta.env.DEV && typeof window !== "undefined" && window.location.pathname === "/design") {
+    return <DesignSystem />;
+  }
+
   const [token,   setToken]   = useState("");
   const [tab,     setTab]     = useState("today");
   const [issues,  setIssues]  = useState([]);

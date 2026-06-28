@@ -1,0 +1,33 @@
+/* ============================================================
+   D7 — GLOBAL STYLESHEET
+   Import order matters: tokens first, then components.
+   ============================================================ */
+
+@import "./design-system/tokens.css";
+@import "./design-system/components.css";
+
+/* ── PAGE SHELL ──────────────────────────────────────────── */
+#root {
+  min-height: 100vh;
+  background: var(--d7-bg);
+  color: var(--d7-text);
+  font-family: var(--d7-font-sans);
+}
+
+/* ── FOCUS VISIBLE ───────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--d7-border-focus);
+  outline-offset: 2px;
+}
+
+/* ── LINK BASE ───────────────────────────────────────────── */
+a {
+  color: var(--d7-accent);
+  text-decoration: none;
+  transition: color var(--d7-duration-fast) var(--d7-ease);
+}
+
+a:hover {
+  color: var(--d7-accent-hover);
+  text-decoration: underline;
+}

@@ -1,6 +1,6 @@
 // CitationBlock — parses the "---\n**CITATIONS**\n" block appended by the
 // legal agent citation pipeline and renders it as a collapsible card.
-// Zero external deps — pure React + Tailwind.
+// Uses D7 design system CSS classes (components.css).
 
 import { useState } from "react";
 
@@ -75,18 +75,7 @@ export default function CitationBlock({ messageText }: CitationBlockProps) {
   // ── Red banner: no citations extracted ───────────────────────────────────
   if (noneExtracted) {
     return (
-      <div
-        style={{
-          marginTop: "8px",
-          padding: "8px 12px",
-          background: "#2d0a0a",
-          border: "1px solid #dc2626",
-          fontFamily: "JetBrains Mono, monospace",
-          fontSize: "11px",
-          color: "#dc2626",
-          letterSpacing: "0.08em",
-        }}
-      >
+      <div className="d7-citation-block__no-citations">
         ⚠ NO CITATIONS EXTRACTED — legal claims must be verified manually
       </div>
     );
@@ -94,69 +83,26 @@ export default function CitationBlock({ messageText }: CitationBlockProps) {
 
   // ── Collapsible citation card ─────────────────────────────────────────────
   return (
-    <div style={{ marginTop: "8px", border: "1px solid #1a2540" }}>
+    <div className="d7-citation-block" style={{ marginTop: "8px" }}>
       {/* Toggle header */}
       <button
+        className="d7-citation-block__header"
         onClick={() => setOpen((o) => !o)}
-        style={{
-          width: "100%",
-          background: "#090e1a",
-          border: "none",
-          borderBottom: open ? "1px solid #1a2540" : "none",
-          padding: "8px 12px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          cursor: "pointer",
-          textAlign: "left",
-        }}
+        style={{ borderBottom: open ? "1px solid var(--d7-border)" : "none" }}
       >
-        <span
-          style={{
-            fontFamily: "JetBrains Mono, monospace",
-            fontSize: "10px",
-            color: "#94a3b8",
-            letterSpacing: "0.15em",
-          }}
-        >
-          CITATIONS ({totalCount})
-        </span>
-        <span
-          style={{
-            fontFamily: "JetBrains Mono, monospace",
-            fontSize: "10px",
-            color: verifiedCount === totalCount ? "#16a34a" : "#d97706",
-            letterSpacing: "0.1em",
-          }}
-        >
+        <span>CITATIONS ({totalCount})</span>
+        <span style={{ color: verifiedCount === totalCount ? "var(--d7-success)" : "var(--d7-warning)" }}>
           {verifiedCount}/{totalCount} VERIFIED {open ? "▴" : "▾"}
         </span>
       </button>
 
       {/* Citation list */}
       {open && (
-        <div style={{ background: "#050810", padding: "8px 12px" }}>
+        <div className="d7-citation-block__body">
           {citations.map((c, i) => (
-            <div
-              key={i}
-              style={{
-                padding: "6px 0",
-                borderBottom: i < citations.length - 1 ? "1px solid #1a2540" : "none",
-                display: "flex",
-                alignItems: "flex-start",
-                gap: "8px",
-              }}
-            >
+            <div className="d7-citation-block__item" key={i}>
               {/* Status badge */}
-              <span
-                style={{
-                  fontFamily: "JetBrains Mono, monospace",
-                  fontSize: "10px",
-                  color: c.verified ? "#16a34a" : "#d97706",
-                  flexShrink: 0,
-                  paddingTop: "1px",
-                }}
-              >
+              <span className={c.verified ? "d7-citation-block__status--verified" : "d7-citation-block__status--unverified"}>
                 {c.verified ? "✓" : "⚠"}
               </span>
 
@@ -168,10 +114,8 @@ export default function CitationBlock({ messageText }: CitationBlockProps) {
                     target="_blank"
                     rel="noopener noreferrer"
                     style={{
-                      fontFamily: "JetBrains Mono, monospace",
-                      fontSize: "11px",
-                      color: "#3b82f6",
-                      textDecoration: "none",
+                      fontFamily: "var(--d7-font-mono)",
+                      fontSize: "var(--d7-text-sm)",
                       wordBreak: "break-all",
                     }}
                   >
@@ -180,22 +124,15 @@ export default function CitationBlock({ messageText }: CitationBlockProps) {
                 ) : (
                   <span
                     style={{
-                      fontFamily: "JetBrains Mono, monospace",
-                      fontSize: "11px",
-                      color: c.verified ? "#e2e8f0" : "#d97706",
+                      fontFamily: "var(--d7-font-mono)",
+                      fontSize: "var(--d7-text-sm)",
+                      color: c.verified ? "var(--d7-text)" : "var(--d7-warning)",
                       wordBreak: "break-word",
                     }}
                   >
                     {c.citation}
                     {!c.verified && (
-                      <span
-                        style={{
-                          marginLeft: "6px",
-                          fontSize: "9px",
-                          color: "#d97706",
-                          letterSpacing: "0.1em",
-                        }}
-                      >
+                      <span style={{ marginLeft: "6px", fontSize: "var(--d7-text-xs)", letterSpacing: "var(--d7-tracking-wide)" }}>
                         [UNVERIFIED]
                       </span>
                     )}
