@@ -18,6 +18,16 @@ jobs:
             --registry ${{ secrets.ACR_NAME }} \
             --image dispatch-seven-api:${{ github.sha }} \
             ./backend
+      - name: Configure ACR pull auth on ACA
+        run: |
+          az acr update --name ${{ secrets.ACR_NAME }} --admin-enabled true
+          ACR_PASSWORD=$(az acr credential show --name ${{ secrets.ACR_NAME }} --query passwords[0].value -o tsv)
+          az containerapp registry set \
+            --name dispatch-seven-api \
+            --resource-group menagerie-rg \
+            --server ${{ secrets.ACR_NAME }}.azurecr.io \
+            --username ${{ secrets.ACR_NAME }} \
+            --password "$ACR_PASSWORD"
       - name: Deploy to ACA
         run: |
           az containerapp update \
