@@ -676,7 +676,7 @@ export default function App() {
     return <DesignSystem />;
   }
 
-  const [token,   setToken]   = useState("");
+  const [token,   setToken]   = useState(import.meta.env.VITE_GITHUB_TOKEN ?? "");
   const [tab,     setTab]     = useState("today");
   const [issues,  setIssues]  = useState([]);
   const [loading, setLoading] = useState(false);

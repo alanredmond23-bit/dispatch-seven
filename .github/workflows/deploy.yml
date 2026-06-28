@@ -36,6 +36,7 @@ jobs:
           VITE_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           VITE_GITHUB_OWNER: alanredmond23-bit
           VITE_GITHUB_REPO: dispatch-seven
+          VITE_GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
