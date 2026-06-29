@@ -35,6 +35,8 @@ import { classifyMessage } from "../lib/classifier.js";
 import { loadAgent } from "../lib/agent-loader.js";
 import { budgetOverrides } from "../lib/session-store.js";
 import type { ProviderConfig } from "../lib/provider.js";
+import { markSessionRead } from "../lib/notify.js";
+import { parseSchedulerOutput, upsertScheduledTasks } from "../lib/scheduler-runner.js";
 
 const ANTHROPIC_URL    = "https://api.anthropic.com/v1/messages";
 const PING_INTERVAL_MS = 30_000;
@@ -101,7 +103,8 @@ async function streamAnthropic(
   content: string,
   onToken: (tok: string) => void,
   systemPrompt?: string,
-  maxTokens = 4096
+  maxTokens = 4096,
+  signal?: AbortSignal
 ): Promise<{ input_tokens: number; output_tokens: number; fullResponse: string }> {
   const usage = { input_tokens: 0, output_tokens: 0 };
   if (!config.apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
@@ -233,6 +236,26 @@ async function streamWithProvider(
 }
 
 // ── WS HANDLER ───────────────────────────────────────────────────────────────
+// ── SESSION STATE (queue + abort controller per session) ─────────────────────
+interface QueuedMessage {
+  content: string;
+  agentOverride?: string;
+}
+
+// Maps session_id → { controller, queue, processing }
+const sessionState = new Map<string, {
+  controller: AbortController | null; // current stream's abort controller
+  queue: QueuedMessage[];             // messages waiting for the current stream to finish
+  processing: boolean;                // true when a stream is active
+}>();
+
+function getSessionState(sid: string) {
+  if (!sessionState.has(sid)) {
+    sessionState.set(sid, { controller: null, queue: [], processing: false });
+  }
+  return sessionState.get(sid)!;
+}
+
 export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
   return upgradeWebSocket((c) => {
     const sessionId = c.req.query("session_id") ?? "unknown";
