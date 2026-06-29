@@ -13,7 +13,7 @@ const DOMAIN_KEYWORDS: Record<AgentDomain, string[]> = {
          'database', 'sql', 'migration', 'supabase', 'hono', 'react', 'tailwind'],
   RESEARCH: ['research', 'find', 'search', 'what is', 'who is', 'latest', 'news',
              'compare', 'analyze', 'report', 'landscape', 'competitive'],
-  SCHEDULER: ['schedule', 'deadline', 'calendar', 'reminder', 'when', 'date',
+  SCHEDULER: ['schedule', 'deadline', 'calendar', 'remind', 'reminder', 'when', 'date',
               'hearing date', 'due', 'cron', 'task', 'upcoming'],
   ORCHESTRATOR: [], // default fallback
 };
@@ -28,6 +28,12 @@ export function classifyMessage(content: string): AgentDomain {
       if (lower.includes(kw)) scores[domain as AgentDomain]++;
     }
   }
-  const top = Object.entries(scores).sort(([, a], [, b]) => b - a)[0];
+  // Tie-break: SCHEDULER wins ties — scheduling tasks are unambiguous even with legal keywords
+  const top = Object.entries(scores).sort(([dA, a], [dB, b]) => {
+    if (b - a !== 0) return b - a;
+    if (dA === 'SCHEDULER') return -1;
+    if (dB === 'SCHEDULER') return 1;
+    return 0;
+  })[0];
   return (top[1] > 0 ? top[0] : 'ORCHESTRATOR') as AgentDomain;
 }
