@@ -16,6 +16,27 @@ const DEFAULT_CASE_ID = "5:24-cr-00376";
 const VOYAGE_ENDPOINT = "https://api.voyageai.com/v1/embeddings";
 const VOYAGE_MODEL = "voyage-3";
 
+// ─── P0-2: Bearer-token auth middleware ───────────────────────────────────────
+// All evidence routes require Authorization: Bearer <token>.
+// Token is compared against API_BEARER_TOKEN env var.
+// Evidence routes carry privileged legal material — must not be publicly accessible.
+evidenceRoutes.use("*", async (c, next) => {
+  const apiToken = process.env.API_BEARER_TOKEN;
+  if (!apiToken) {
+    // Misconfigured environment — deny all requests rather than fail open
+    return c.json({ error: "Server misconfigured: API_BEARER_TOKEN not set" }, 503);
+  }
+
+  const authHeader = c.req.header("Authorization") ?? "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+
+  if (!token || token !== apiToken) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  return next();
+});
+
 // ─── Embed a query string ─────────────────────────────────────────────────────
 // Separate from the document embedder in five9-indexer.ts.
 // Uses input_type="query" — Voyage asymmetric retrieval: query ≠ document space.
