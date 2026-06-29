@@ -148,3 +148,8 @@ vite.config.ts.timestamp-*
 *.pyc
 __pycache__/
 dispatcher.db
+
+# SQLite session databases — never commit
+sessions.db
+sessions.db-journal
+*.db-journal
