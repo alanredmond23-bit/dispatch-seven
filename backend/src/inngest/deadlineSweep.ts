@@ -1,10 +1,36 @@
 // deadlineSweep — Inngest cron job for deadline notifications
 // Trigger: cron "0 8 * * *" (8am daily)
 // Queries dispatch7.deadlines for items due within 7 days that have not been notified
-// Logs notification for each, then marks notified=true
+// Delivers real push notification via ntfy.sh, then marks notified=true
 
 import { inngest } from "../lib/inngest.js";
 import { supabase } from "../lib/supabase.js";
+
+const NTFY_TOPIC = process.env.NTFY_TOPIC ?? 'dispatch7-alerts';
+
+/** Send a push notification via ntfy.sh. Falls back to console.log if fetch fails. */
+async function sendNtfyAlert(title: string, body: string): Promise<void> {
+  if (!process.env.NTFY_TOPIC && process.env.NODE_ENV !== 'production') {
+    // NTFY_TOPIC not set — log and skip to avoid spamming public topic in dev
+    console.log(`[deadlineSweep] NOTIFICATION (ntfy not configured): ${body}`);
+    return;
+  }
+  try {
+    await fetch(`https://ntfy.sh/${NTFY_TOPIC}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain',
+        'Title': title,
+        'Priority': 'urgent',
+        'Tags': 'alarm_clock',
+      },
+      body,
+    });
+  } catch (err) {
+    // ntfy.sh unreachable — fall back to console so the function doesn't error
+    console.log(`[deadlineSweep] NOTIFICATION (ntfy failed, fallback): ${body}`, err);
+  }
+}
 
 export const deadlineSweep = inngest.createFunction(
   { id: "deadline-sweep", name: "Daily Deadline Sweep" },
@@ -35,12 +61,12 @@ export const deadlineSweep = inngest.createFunction(
       return { notified: 0 };
     }
 
-    // Step 2: Log notification for each deadline
+    // Step 2: Send real ntfy.sh notification for each deadline
     await step.run("notify-deadlines", async () => {
       for (const deadline of upcoming) {
-        // Notification stub — replace with email/SMS/Slack when service is wired
-        console.log(
-          `[deadlineSweep] NOTIFICATION: case_id=${deadline.case_id} | "${deadline.description}" | due=${deadline.due_date} | id=${deadline.id}`
+        await sendNtfyAlert(
+          'D7 Deadline Alert',
+          `DEADLINE: ${deadline.description} — ${deadline.due_date}`
         );
       }
     });

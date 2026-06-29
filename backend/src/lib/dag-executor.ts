@@ -2,6 +2,11 @@
 // Executes a task graph in topological order using Inngest for durability.
 // Nodes with no unresolved deps run in parallel; nodes with deps wait.
 // Writes node status/output to dispatch7.tasks.
+//
+// Turn 10 additions:
+//   - retryWithBackoff: 3 attempts, exponential delay (500ms → 2s → 8s), jitter
+//   - per-node 120s timeout via AbortController + Promise.race
+//   - attempt count written to task payload for observability
 
 import { inngest } from "./inngest.js";
 import { supabase } from "./supabase.js";
@@ -21,6 +26,68 @@ export interface TaskNode {
 
 export interface TaskGraph {
   nodes: TaskNode[];
+}
+
+// ── Retry + timeout config ─────────────────────────────────────────────────
+
+const RETRY_MAX_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 500;   // 500ms → 2s → 8s (exponential × 4, +jitter)
+const NODE_TIMEOUT_MS = 120_000;   // 2 minutes per node hard cap
+
+/**
+ * retryWithBackoff — execute fn up to maxAttempts times.
+ * Delays: baseMs, baseMs*4, baseMs*16, ... + uniform jitter ±20%.
+ * Does NOT retry if the error message contains "ANTHROPIC_API_KEY" (config error).
+ */
+async function retryWithBackoff<T>(
+  fn: (signal: AbortSignal) => Promise<T>,
+  maxAttempts = RETRY_MAX_ATTEMPTS,
+  baseDelayMs = RETRY_BASE_DELAY_MS
+): Promise<{ result: T; attempts: number }> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // Per-attempt timeout via AbortController
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => {
+      controller.abort(new Error(`Node timeout after ${NODE_TIMEOUT_MS}ms`));
+    }, NODE_TIMEOUT_MS);
+
+    try {
+      const result = await fn(controller.signal);
+      clearTimeout(timeoutHandle);
+      return { result, attempts: attempt };
+    } catch (err: unknown) {
+      clearTimeout(timeoutHandle);
+      lastError = err;
+
+      const msg = err instanceof Error ? err.message : String(err);
+
+      // Config errors (missing API key, unknown agent) are not retryable
+      const isConfigError =
+        msg.includes("ANTHROPIC_API_KEY") ||
+        msg.includes("not set") ||
+        msg.includes("Unknown agent");
+      if (isConfigError) {
+        throw err;
+      }
+
+      // Abort-caused timeouts are retryable (transient load spikes)
+      console.warn(
+        `[dag-executor] node attempt ${attempt}/${maxAttempts} failed: ${msg}`
+      );
+
+      if (attempt < maxAttempts) {
+        // Exponential backoff with ±20% jitter
+        const baseDelay = baseDelayMs * Math.pow(4, attempt - 1);
+        const jitter = baseDelay * 0.2 * (Math.random() * 2 - 1); // ±20%
+        const delay = Math.max(0, Math.round(baseDelay + jitter));
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -47,6 +114,7 @@ async function insertNodeRow(
         started_at: null,
         completed_at: null,
         output: null,
+        retry_attempts: null,
       },
     })
     .select("id")
@@ -69,7 +137,12 @@ function rowId(map: NodeIdMap, nodeId: string): string {
 async function updateNodeStatus(
   rowUuid: string,
   status: NodeStatus,
-  extra?: { started_at?: string; completed_at?: string; output?: unknown }
+  extra?: {
+    started_at?: string;
+    completed_at?: string;
+    output?: unknown;
+    retry_attempts?: number;
+  }
 ): Promise<void> {
   // Supabase JSONB merge — fetch existing payload first then upsert merged
   const { data: existing } = await supabase
@@ -93,9 +166,12 @@ async function updateNodeStatus(
   }
 }
 
-/** Call the agent for a node and return the output. */
+/** Call the agent for a node and return the output.
+ *  Accepts AbortSignal — passed to fetch so node timeout cancels the HTTP call.
+ */
 async function callAgent(
-  node: TaskNode
+  node: TaskNode,
+  signal?: AbortSignal
 ): Promise<Record<string, unknown>> {
   const config = await loadAgent(node.type);
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -121,6 +197,7 @@ async function callAgent(
       system: config.systemPrompt,
       messages: [{ role: "user", content: instruction }],
     }),
+    signal, // propagate abort signal — timeout or graph cancellation
   });
 
   if (!res.ok) {
@@ -190,6 +267,9 @@ export function validateGraph(graph: TaskGraph): string | null {
  * 1. Build NodeIdMap (node.id → db uuid) — rows already inserted by route
  * 2. Walk levels: nodes whose deps are all done run in parallel
  * 3. On failure: mark node + all transitive dependents failed
+ *
+ * Each node call uses retryWithBackoff (3 attempts, exponential) and a
+ * per-node 120s hard timeout. Retry count written to task payload.
  */
 export async function executeDag(
   sessionId: string,
@@ -226,24 +306,27 @@ export async function executeDag(
     }
   }
 
-  /** Execute a single node. */
+  /** Execute a single node with retry + timeout. */
   async function runNode(node: TaskNode): Promise<void> {
     const uuid = rowId(nodeIdMap, node.id);
     await updateNodeStatus(uuid, "running", { started_at: new Date().toISOString() });
     try {
-      const output = await callAgent(node);
+      const { result: output, attempts } = await retryWithBackoff(
+        (signal) => callAgent(node, signal)
+      );
       await updateNodeStatus(uuid, "done", {
         completed_at: new Date().toISOString(),
         output,
+        retry_attempts: attempts,
       });
       done.add(node.id);
       pending.delete(node.id);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[dag-executor] node ${node.id} failed:`, msg);
+      console.error(`[dag-executor] node ${node.id} failed after ${RETRY_MAX_ATTEMPTS} attempts:`, msg);
       await updateNodeStatus(uuid, "failed", {
         completed_at: new Date().toISOString(),
-        output: { error: msg },
+        output: { error: msg, retried: RETRY_MAX_ATTEMPTS },
       });
       failed.add(node.id);
       pending.delete(node.id);

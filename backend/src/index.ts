@@ -23,6 +23,8 @@ import { sessionRoutes } from "./routes/sessions.js";  // T10: active session li
 import { budgetGuard } from "./middleware/budget-guard.js"; // PR32: per-session spend cap
 import { evidenceRoutes } from "./routes/evidence.js"; // Five9 WAV evidence indexer — 5:24-cr-00376
 import { flushLangfuse } from "./lib/langfuse.js";     // P1-3: graceful shutdown flush
+import { dashboardRoutes } from "./routes/dashboard.js"; // PR14: ops dashboard
+import { healthRoutes } from "./routes/health.js"; // PR11: deep dependency health check
 
 // Inngest — client + all registered functions
 import { inngest } from "./lib/inngest.js";
@@ -97,10 +99,8 @@ app.use("*", async (c, next) => {
 
 app.use("/api/*", budgetGuard); // PR32: 402 when session exceeds budget_usd
 
-// Health check
-app.get("/health", (c) =>
-  c.json({ status: "ok", version: "1.0.0", timestamp: Date.now() })
-);
+// Health check — deep dependency probe (PR11)
+app.route("/health", healthRoutes);
 
 // REST routes
 app.route("/api/v1/agents", agentRoutes);
@@ -115,6 +115,7 @@ app.route("/api/v1/jobs", jobRoutes);              // T9: job trigger + status
 app.route("/api/v1/sessions", sessionRoutes);      // T10: session list + message feed
 app.route("/api/evidence", evidenceRoutes);        // Five9 WAV evidence — ingest/search/list — 5:24-cr-00376
 app.route("/api/settings", settingsRouter);        // Settings: CRUD for all D7 operator preferences
+app.route("/dashboard", dashboardRoutes);           // PR14: ops dashboard
 
 // Inngest serve handler — canonical Hono adapter pattern
 // GET: introspection by Inngest Cloud
