@@ -49,7 +49,7 @@ export function loadAgent(
   try {
     const src = readFileSync(agentPath, 'utf-8');
     // Match: export const LEGAL_SYSTEM = `...` or similar
-    const pattern = new RegExp(`${exportName}\\s*=\\s*\\`([^\\`]+)\\``, 's');
+    const pattern = new RegExp(`${exportName}\\s*=\\s*\`([^\`]+)\``, 's');
     const match = src.match(pattern);
     if (match) systemPrompt = match[1].trim();
   } catch {
