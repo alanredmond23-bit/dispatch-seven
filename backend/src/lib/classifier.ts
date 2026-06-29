@@ -13,7 +13,7 @@ const DOMAIN_KEYWORDS: Record<AgentDomain, string[]> = {
          'database', 'sql', 'migration', 'supabase', 'hono', 'react', 'tailwind'],
   RESEARCH: ['research', 'find', 'search', 'what is', 'who is', 'latest', 'news',
              'compare', 'analyze', 'report', 'landscape', 'competitive'],
-  SCHEDULER: ['schedule', 'deadline', 'calendar', 'reminder', 'when', 'date',
+  SCHEDULER: ['schedule', 'deadline', 'calendar', 'remind', 'reminder', 'when', 'date',
               'hearing date', 'due', 'cron', 'task', 'upcoming'],
   ORCHESTRATOR: [], // default fallback
 };
