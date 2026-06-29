@@ -1,0 +1,15 @@
+{
+  "generated": "2026-06-29",
+  "operator": "acmltd105@gmail.com",
+  "session_root": "49acd879-c541-4a02-99c6-886584349b90",
+  "total_files": 1,
+  "files": [
+    {
+      "path": "MASTER.md",
+      "size_bytes": 16530,
+      "sha256_8": "c5f0ca74",
+      "source_tier": "memory+transcript",
+      "mtime": "2026-06-29"
+    }
+  ]
+}
