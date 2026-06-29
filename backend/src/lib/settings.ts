@@ -20,6 +20,9 @@ export interface D7Settings {
   defaultModel: string;
   /** Per-agent model overrides — keyed by AgentDomain string */
   agentModelOverrides: Record<string, string>;
+  // Provider routing (feat/provider-routing compat)
+  agentProviderOverrides: Record<string, string>;
+  defaultProvider: string;
   /** Max tokens per completion */
   maxTokens: number;
 
@@ -96,6 +99,8 @@ export const DEFAULTS: D7Settings = {
   agentPromptOverrides: {},
   defaultModel: 'claude-opus-4-8',
   agentModelOverrides: {},
+  agentProviderOverrides: {},
+  defaultProvider: 'anthropic',
   maxTokens: 16000,
   mem0Enabled: true,
   mem0SearchLimit: 10,
@@ -206,3 +211,24 @@ export function invalidateSettingsCache(): void {
   _cache = null;
   _cacheTs = 0;
 }
+
+// ── Provider-routing compatibility (feat/provider-routing) ──────────────────
+// Re-exported so agent-loader.ts (which uses provider resolution) can import
+// resolveProvider and DEFAULT_SETTINGS without a separate module.
+import type { Provider } from './provider.js';
+
+/** Pick the provider for a given agent. Priority: agent override → default → env → 'anthropic' */
+export function resolveProvider(
+  agentName: string,
+  settings: Partial<D7Settings> = DEFAULTS,
+): Provider {
+  const override = settings.agentProviderOverrides?.[agentName] as Provider | undefined;
+  if (override) return override;
+  if (settings.defaultProvider) return settings.defaultProvider as Provider;
+  const envProvider = process.env.DEFAULT_PROVIDER as Provider | undefined;
+  if (envProvider) return envProvider;
+  return 'anthropic';
+}
+
+/** Alias for DEFAULTS — used by agent-loader.ts */
+export const DEFAULT_SETTINGS = DEFAULTS;

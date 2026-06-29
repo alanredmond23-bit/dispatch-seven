@@ -117,7 +117,7 @@ function waitForEvent(ws: WebSocket, type: string, timeoutMs = 5000): Promise<un
     const timer = setTimeout(() =>
       reject(new Error(`Timeout waiting for "${type}" event`)), timeoutMs
     );
-    ws.on("message", (raw) => {
+    ws.on("message", (raw: Buffer | string) => {
       try {
         const msg = JSON.parse(raw.toString());
         if (msg.type === type) {
@@ -134,7 +134,7 @@ function collectUntilClose(ws: WebSocket, timeoutMs = 5000): Promise<unknown[]> 
   return new Promise((resolve) => {
     const messages: unknown[] = [];
     const timer = setTimeout(() => resolve(messages), timeoutMs);
-    ws.on("message", (raw) => {
+    ws.on("message", (raw: Buffer | string) => {
       try { messages.push(JSON.parse(raw.toString())); } catch { /* ignore */ }
     });
     ws.once("close", () => { clearTimeout(timer); resolve(messages); });

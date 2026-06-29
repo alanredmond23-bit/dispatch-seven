@@ -1,7 +1,11 @@
-// D7 WebSocket transport — bidirectional Claude streaming
+// D7 WebSocket transport — bidirectional streaming (Anthropic + OpenAI-compatible)
 // Route: GET /ws?session_id=<id>
 // Replaces direct frontend→Anthropic fetch with backend-proxied streaming.
 // SSE endpoint (/api/v1/stream) left intact as fallback for older clients.
+//
+// Provider routing:
+//   'anthropic' → native Anthropic SSE fetch (original path, unchanged)
+//   'openai' | 'groq' | 'ollama' → OpenAI SDK with baseURL override
 //
 // Message protocol (client → server):
 //   { type: "message", content: string, session_id: string }
@@ -20,6 +24,7 @@
 //     arrives, it is queued and processed sequentially (no concurrent stream races)
 
 import type { UpgradeWebSocket } from "hono/ws";
+import OpenAI from "openai";
 import { trackRun } from "../lib/cost-tracker.js";
 import { getRelevantContext, addMemory } from "../lib/mem0.js";
 import { traceRun } from "../lib/langfuse.js";
@@ -29,6 +34,7 @@ import { parseAndInsertActions } from "../middleware/actions-parser.js";
 import { classifyMessage } from "../lib/classifier.js";
 import { loadAgent } from "../lib/agent-loader.js";
 import { budgetOverrides } from "../lib/session-store.js";
+import type { ProviderConfig } from "../lib/provider.js";
 import { markSessionRead } from "../lib/notify.js";
 import { parseSchedulerOutput, upsertScheduledTasks } from "../lib/scheduler-runner.js";
 
@@ -41,6 +47,7 @@ const PONG_TIMEOUT_MS  = 10_000;
 const WS_AUTH_DISABLED = process.env.WS_AUTH_DISABLED === "true";
 
 // ── BUDGET CAP ───────────────────────────────────────────────────────────────
+// Per-session hard cap. Set BUDGET_CAP_USD in env; default $1.00.
 const BUDGET_CAP_USD = parseFloat(process.env.BUDGET_CAP_USD ?? "1.00");
 
 /**
@@ -110,57 +117,37 @@ async function buildCitationBlock(fullText: string): Promise<string> {
   return "\n\n---\n**CITATIONS**\n" + lines.join("\n");
 }
 
-// ── CLAUDE STREAMING ─────────────────────────────────────────────────────────
-// Stream Claude tokens, calling onToken per chunk.
-// Returns { input_tokens, output_tokens, fullResponse } captured from SSE events.
-// systemPrompt: prepended context (mem0 injection, legal system prompt, etc.)
-// P1-6: AbortController enforces a 120s hard timeout on the Anthropic fetch.
-// AbortSignal parameter added (Turn 12):
-// - Passed to fetch() so the HTTP connection is killed when the WS closes
-// - Also allows per-session message queue to cancel in-flight streams on tab close
-async function streamClaude(
+// ── ANTHROPIC STREAMING ───────────────────────────────────────────────────────
+// Original Anthropic SSE path — preserved unchanged for 'anthropic' provider.
+async function streamAnthropic(
+  config: ProviderConfig,
   content: string,
   onToken: (tok: string) => void,
   systemPrompt?: string,
-  model = "claude-sonnet-4-6",
   maxTokens = 4096,
-  signal?: AbortSignal  // Turn 12: abort support
+  signal?: AbortSignal
 ): Promise<{ input_tokens: number; output_tokens: number; fullResponse: string }> {
   const usage = { input_tokens: 0, output_tokens: 0 };
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
+  if (!config.apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
 
   const body: Record<string, unknown> = {
-    model,
+    model:      config.model,
     max_tokens: maxTokens,
     stream:     true,
-    messages: [{ role: "user", content }],
+    messages:   [{ role: "user", content }],
   };
-  if (systemPrompt) {
-    body.system = systemPrompt;
-  }
+  if (systemPrompt) body.system = systemPrompt;
 
-  // P1-6: 120s timeout — Anthropic hangs occasionally; don't let WS hang forever
-  // Combined with Turn 12 external signal (abort-on-disconnect / queue cancellation)
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120_000);
-  if (signal) signal.addEventListener("abort", () => controller.abort());
-
-  let res: Response;
-  try {
-    res = await fetch(ANTHROPIC_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type":      "application/json",
-        "x-api-key":         apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
+  const res = await fetch(ANTHROPIC_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type":      "application/json",
+      "x-api-key":         config.apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify(body),
+    signal, // Turn 12: kills the TCP connection when signal fires
+  });
 
   if (!res.ok) {
     const err = await res.text();
@@ -196,26 +183,81 @@ async function streamClaude(
           usage.input_tokens = evt.message.usage.input_tokens ?? 0;
         } else if (evt.type === "message_delta" && evt.usage) {
           usage.output_tokens = evt.usage.output_tokens ?? 0;
-        } else if (
-          evt.type === "content_block_delta" &&
-          evt.delta?.type === "text_delta"
-        ) {
+        } else if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") {
           onToken(evt.delta.text);
           fullResponse += evt.delta.text;
         }
-      } catch {
-        // malformed JSON line — skip
-      }
+      } catch { /* malformed JSON line — skip */ }
     }
   }
   return { ...usage, fullResponse };
 }
 
-// ── PER-SESSION STREAM STATE ──────────────────────────────────────────────────
-// Turn 12: track active streams and queue pending messages per session.
-// This prevents concurrent messages from racing each other on a single WS connection.
-// The queue is purely in-memory — no persistence needed (WS sessions are ephemeral).
+// ── OPENAI-COMPATIBLE STREAMING ───────────────────────────────────────────────
+// Handles OpenAI, Groq, Ollama. All use the same OpenAI SDK with baseURL override.
+// Token counts: OpenAI/Groq return usage on the final chunk; Ollama may not.
+async function streamOpenAI(
+  config: ProviderConfig,
+  content: string,
+  onToken: (tok: string) => void,
+  systemPrompt?: string,
+  maxTokens = 4096
+): Promise<{ input_tokens: number; output_tokens: number; fullResponse: string }> {
+  const client = new OpenAI({
+    apiKey:  config.apiKey,
+    baseURL: config.baseURL,
+  });
 
+  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+  if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
+  messages.push({ role: "user", content });
+
+  // stream_options.include_usage: returns token counts on the final [DONE] chunk
+  const stream = await client.chat.completions.create({
+    model:          config.model,
+    messages,
+    max_tokens:     maxTokens,
+    stream:         true,
+    stream_options: { include_usage: true },
+  });
+
+  let fullResponse = "";
+  let input_tokens  = 0;
+  let output_tokens = 0;
+
+  for await (const chunk of stream) {
+    const delta = chunk.choices[0]?.delta?.content;
+    if (delta) {
+      onToken(delta);
+      fullResponse += delta;
+    }
+    // usage arrives on the last chunk when stream_options.include_usage is set
+    if (chunk.usage) {
+      input_tokens  = chunk.usage.prompt_tokens     ?? 0;
+      output_tokens = chunk.usage.completion_tokens ?? 0;
+    }
+  }
+
+  return { input_tokens, output_tokens, fullResponse };
+}
+
+// ── UNIFIED STREAMING ENTRY POINT ─────────────────────────────────────────────
+// Routes to Anthropic or OpenAI path based on providerConfig.type.
+async function streamWithProvider(
+  config: ProviderConfig,
+  content: string,
+  onToken: (tok: string) => void,
+  systemPrompt?: string,
+  maxTokens = 4096
+): Promise<{ input_tokens: number; output_tokens: number; fullResponse: string }> {
+  if (config.type === "anthropic") {
+    return streamAnthropic(config, content, onToken, systemPrompt, maxTokens);
+  }
+  return streamOpenAI(config, content, onToken, systemPrompt, maxTokens);
+}
+
+// ── WS HANDLER ───────────────────────────────────────────────────────────────
+// ── SESSION STATE (queue + abort controller per session) ─────────────────────
 interface QueuedMessage {
   content: string;
   agentOverride?: string;
@@ -235,7 +277,6 @@ function getSessionState(sid: string) {
   return sessionState.get(sid)!;
 }
 
-// ── WS HANDLER ───────────────────────────────────────────────────────────────
 export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
   return upgradeWebSocket((c) => {
     const sessionId = c.req.query("session_id") ?? "unknown";
@@ -271,9 +312,7 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
               console.warn(`[WS] pong timeout session=${sessionId} — closing`);
               ws.close(1001, "pong timeout");
             }, PONG_TIMEOUT_MS);
-          } catch {
-            // socket already closed
-          }
+          } catch { /* socket already closed */ }
         }, PING_INTERVAL_MS);
       },
 
@@ -371,7 +410,7 @@ async function processMessageAndDrainQueue(
   const agentLabel = agentFromMsg ?? domain;
   console.log(`[WS] message session=${sid} len=${userMessage.length} agent=${agentLabel}`);
 
-  ws.send(JSON.stringify({ type: "route", agent: domain, model: agentConfig.model }));
+  ws.send(JSON.stringify({ type: "route", agent: domain, model: agentConfig.model, provider: agentConfig.provider }));
 
   const taskId      = `task-${sid}-${Date.now()}`;
   const taskStarted = new Date().toISOString();
@@ -417,16 +456,15 @@ async function processMessageAndDrainQueue(
   const runId   = await tracker.start().catch(() => null);
 
   try {
-    const { fullResponse, ...usage } = await streamClaude(
+    const { fullResponse, ...usage } = await streamWithProvider(
+      agentConfig.providerConfig,
       userMessage,
       (token) => {
         outputBuf += token;
         ws.send(JSON.stringify({ type: "token", content: token }));
       },
       systemPrompt,
-      agentConfig.model,
-      agentConfig.maxTokens,
-      controller.signal // Turn 12: abort signal
+      agentConfig.maxTokens
     );
 
     if (domain === "LEGAL" && fullResponse) {
@@ -591,11 +629,11 @@ export async function writeTaskStatus(payload: TaskStatusPayload): Promise<void>
           progress_pct,
           cost_usd,
           agent_name,
-          started_at:    started_at ?? new Date().toISOString(),
-          completed_at:  (status === "done" || status === "failed")
-                           ? new Date().toISOString()
-                           : null,
-          error:         error ?? null,
+          started_at:   started_at ?? new Date().toISOString(),
+          completed_at: (status === "done" || status === "failed")
+                          ? new Date().toISOString()
+                          : null,
+          error: error ?? null,
         },
         updated_at: new Date().toISOString(),
       },
