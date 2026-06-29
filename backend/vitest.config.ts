@@ -7,6 +7,13 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    // Test env — disable auth gate and set budget fail-open so integration tests
+    // can connect without Bearer tokens (auth is tested via e2e, not unit/integration)
+    env: {
+      WS_AUTH_DISABLED: "true",
+      BUDGET_FAIL_OPEN: "true",
+    },
+
     // Global timeout — integration tests start HTTP servers
     testTimeout: 15_000,
     hookTimeout: 10_000,

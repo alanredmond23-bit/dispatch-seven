@@ -34,10 +34,19 @@ import { budgetOverrides } from "../lib/session-store.js";
 const ANTHROPIC_URL    = "https://api.anthropic.com/v1/messages";
 const PING_INTERVAL_MS = 30_000;
 const PONG_TIMEOUT_MS  = 10_000;
+// P0-1: Set WS_AUTH_DISABLED=true in local dev to bypass token check.
+// In production, every WS upgrade must carry Authorization: Bearer <token>
+// or a ?token= query param. Any non-empty token is accepted (JWT tightening pending).
+const WS_AUTH_DISABLED = process.env.WS_AUTH_DISABLED === "true";
 
 // ── BUDGET CAP ───────────────────────────────────────────────────────────────
 const BUDGET_CAP_USD = parseFloat(process.env.BUDGET_CAP_USD ?? "1.00");
 
+/**
+ * checkBudget — returns the current session spend.
+ * Throws if BUDGET_CAP_USD is exceeded.
+ * P1-5: Fails CLOSED by default. Set BUDGET_FAIL_OPEN=true to revert to old behaviour.
+ */
 async function checkBudget(sessionId: string): Promise<void> {
   const { data, error } = await supabase
     .from("agent_runs")
@@ -45,7 +54,12 @@ async function checkBudget(sessionId: string): Promise<void> {
     .eq("session_id", sessionId);
 
   if (error) {
-    console.warn(`[budget] query failed for session=${sessionId}: ${error.message}`);
+    // P1-5: fail closed — Supabase down = no budget data = deny by default.
+    // Set BUDGET_FAIL_OPEN=true to restore old fail-open behaviour.
+    if (process.env.BUDGET_FAIL_OPEN !== "true") {
+      throw new Error(`Budget check failed (Supabase error): ${error.message}`);
+    }
+    console.warn(`[budget] query failed for session=${sessionId}: ${error.message} — failing open`);
     return;
   }
 
@@ -72,10 +86,17 @@ async function buildCitationBlock(fullText: string): Promise<string> {
     return "\n\n---\n**CITATIONS**\n⚠️ No citations extracted — legal claims should be verified manually.";
   }
 
+  // P2-6: Verify all citations in parallel with individual try/catch per citation.
+  // A single bad URL must not kill the entire citation block.
   const verified = await Promise.all(
     citations.map(async (c) => {
-      const result = await verifyCitation(c.citation);
-      return { ...c, ...result };
+      try {
+        const result = await verifyCitation(c.citation);
+        return { ...c, ...result };
+      } catch {
+        // Non-fatal: mark as unverified but continue with other citations
+        return { ...c, verified: false, url: undefined };
+      }
     })
   );
 
@@ -89,6 +110,10 @@ async function buildCitationBlock(fullText: string): Promise<string> {
 }
 
 // ── CLAUDE STREAMING ─────────────────────────────────────────────────────────
+// Stream Claude tokens, calling onToken per chunk.
+// Returns { input_tokens, output_tokens, fullResponse } captured from SSE events.
+// systemPrompt: prepended context (mem0 injection, legal system prompt, etc.)
+// P1-6: AbortController enforces a 120s hard timeout on the Anthropic fetch.
 // AbortSignal parameter added (Turn 12):
 // - Passed to fetch() so the HTTP connection is killed when the WS closes
 // - Also allows per-session message queue to cancel in-flight streams on tab close
@@ -114,16 +139,27 @@ async function streamClaude(
     body.system = systemPrompt;
   }
 
-  const res = await fetch(ANTHROPIC_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type":      "application/json",
-      "x-api-key":         apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify(body),
-    signal, // Turn 12: kills the TCP connection when signal fires
-  });
+  // P1-6: 120s timeout — Anthropic hangs occasionally; don't let WS hang forever
+  // Combined with Turn 12 external signal (abort-on-disconnect / queue cancellation)
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  if (signal) signal.addEventListener("abort", () => controller.abort());
+
+  let res: Response;
+  try {
+    res = await fetch(ANTHROPIC_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type":      "application/json",
+        "x-api-key":         apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!res.ok) {
     const err = await res.text();
@@ -205,8 +241,26 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
     let pingTimer: ReturnType<typeof setInterval> | null = null;
     let pongTimer: ReturnType<typeof setTimeout>  | null = null;
 
+    // P0-1: Bearer token auth for WebSocket upgrades.
+    // Accept token from Authorization header ("Bearer <token>") or ?token= query param.
+    // Any non-empty token is accepted for now; will tighten to JWT signature check later.
+    // Bypass with WS_AUTH_DISABLED=true for local dev.
+    const authHeader  = c.req.header("Authorization") ?? "";
+    const tokenFromQuery = c.req.query("token") ?? "";
+    const bearerToken = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7).trim()
+      : tokenFromQuery.trim();
+    const isAuthed = WS_AUTH_DISABLED || bearerToken.length > 0;
+
     return {
       onOpen(_evt, ws) {
+        // P0-1: Reject unauthenticated connections immediately after upgrade.
+        // 1008 = Policy Violation (standard code for auth failures on WS)
+        if (!isAuthed) {
+          ws.close(1008, "Unauthorized");
+          return;
+        }
+
         console.log(`[WS] open session=${sessionId}`);
 
         pingTimer = setInterval(() => {
