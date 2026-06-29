@@ -2,6 +2,8 @@
 // Event trigger: "dispatch/research.run"
 // Accepts { query: string; case_id: string }
 // Stores result to dispatch7.research_results
+// GUARD: RESEARCH_AGENT_ENABLED=true must be set — stub writes are blocked
+// until the real agent is wired to prevent placeholder data in production.
 
 import { inngest } from "../lib/inngest.js";
 import { supabase } from "../lib/supabase.js";
@@ -14,6 +16,13 @@ export const researchJob = inngest.createFunction(
       query: string;
       case_id: string;
     };
+
+    // Feature flag guard — prevents stub placeholder from polluting production DB
+    // until a real research agent is wired. Set RESEARCH_AGENT_ENABLED=true to enable.
+    if (process.env.RESEARCH_AGENT_ENABLED !== 'true') {
+      console.warn('[researchJob] RESEARCH_AGENT_ENABLED not set — skipping stub write');
+      return { status: 'disabled' };
+    }
 
     // Step 1: Log research start
     await step.run("log-start", async () => {

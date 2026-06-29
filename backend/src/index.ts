@@ -22,6 +22,7 @@ import { jobRoutes } from "./routes/jobs.js";          // T9: Inngest job queue 
 import { sessionRoutes } from "./routes/sessions.js";  // T10: active session listing
 import { budgetGuard } from "./middleware/budget-guard.js"; // PR32: per-session spend cap
 import { evidenceRoutes } from "./routes/evidence.js"; // Five9 WAV evidence indexer — 5:24-cr-00376
+import { healthRoutes } from "./routes/health.js"; // PR11: deep dependency health check
 
 // Inngest — client + all registered functions
 import { inngest } from "./lib/inngest.js";
@@ -37,10 +38,8 @@ app.use("*", logger());
 app.use("*", cors());
 app.use("/api/*", budgetGuard); // PR32: 402 when session exceeds budget_usd
 
-// Health check
-app.get("/health", (c) =>
-  c.json({ status: "ok", version: "1.0.0", timestamp: Date.now() })
-);
+// Health check — deep dependency probe (PR11)
+app.route("/health", healthRoutes);
 
 // REST routes
 app.route("/api/v1/agents", agentRoutes);
