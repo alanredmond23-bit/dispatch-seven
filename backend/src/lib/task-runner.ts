@@ -13,6 +13,7 @@
 // Integration: wire into dag-executor, Inngest job dispatch, and /api/v1/jobs/enqueue
 
 import { PriorityQueue, Priority, parsePriority } from "./priority-queue.js";
+export { Priority, parsePriority };
 
 export type TaskFn<T> = () => Promise<T>;
 
