@@ -11,6 +11,7 @@ import { generateScheduleViaWs } from "./lib/wsSchedule";
 import CitationBlock, { parseMessageCitations } from "./components/CitationBlock";
 import { DesignSystem } from "./pages/DesignSystem";
 import Dashboard from "./pages/Dashboard";  // T10: multi-panel agent dashboard
+import Settings from "./pages/Settings";  // feature/settings-ui
 import "./index.css";
 
 import ActionsPanel from "./components/ActionsPanel";
@@ -616,6 +617,13 @@ function Header({ issueCount, trialDays, onRefresh, loading, sessionId, wsStatus
         <span style={{ fontFamily:T.mono, fontSize:"11px", color: trialDays <= 30 ? "#dc2626" : T.muted, letterSpacing:"0.1em" }}>
           {trialDays}d
         </span>
+        <a
+          href="/settings"
+          title="Settings"
+          style={{ ...css.btn, padding:"5px 8px", fontSize:"14px", textDecoration:"none", display:"flex", alignItems:"center", color: window.location.pathname === "/settings" ? "#5B6EF5" : T.muted }}
+        >
+          ⚙
+        </a>
         <button onClick={onRefresh} style={{ ...css.btn, fontSize:"9px", padding:"4px 8px" }}>
           {loading ? "..." : "↻"}
         </button>
@@ -667,6 +675,12 @@ export default function App() {
   // /dashboard — agent session dashboard (production + dev)
   if (typeof window !== "undefined" && window.location.pathname === "/dashboard") {
     return <Dashboard />;
+  }
+
+
+  // Settings page — /settings
+  if (typeof window !== "undefined" && window.location.pathname === "/settings") {
+    return <Settings />;
   }
 
   // DEV-only: route /design to design system preview

@@ -17,6 +17,7 @@ import { actionRoutes } from "./routes/actions.js";
 import { buildWsHandler } from "./routes/ws.js";
 import { runsRoutes } from "./routes/runs.js";
 import { copilotRoutes } from "./routes/copilot.js";   // S3: CopilotKit runtime
+import { settingsRouter } from "./routes/settings.js"; // Settings: system prompt + model + feature flags
 import { jobRoutes } from "./routes/jobs.js";          // T9: Inngest job queue API
 import { sessionRoutes } from "./routes/sessions.js";  // T10: active session listing
 import { budgetGuard } from "./middleware/budget-guard.js"; // PR32: per-session spend cap
@@ -113,6 +114,7 @@ app.route("/api/copilot", copilotRoutes);          // S3: CopilotKit action runt
 app.route("/api/v1/jobs", jobRoutes);              // T9: job trigger + status
 app.route("/api/v1/sessions", sessionRoutes);      // T10: session list + message feed
 app.route("/api/evidence", evidenceRoutes);        // Five9 WAV evidence — ingest/search/list — 5:24-cr-00376
+app.route("/api/settings", settingsRouter);        // Settings: CRUD for all D7 operator preferences
 
 // Inngest serve handler — canonical Hono adapter pattern
 // GET: introspection by Inngest Cloud
