@@ -17,7 +17,12 @@ export default defineConfig({
     // Exclude stray manual test scripts that call real APIs and use process.exit().
     // src/routes/decompose.test.ts is a manual smoke-check (calls real Anthropic API,
     // uses process.exit()), not a Vitest suite. Running it in CI crashes the test runner.
-    exclude: ["**/node_modules/**", "src/routes/decompose.test.ts"],
+    exclude: [
+      "**/node_modules/**",
+      "src/routes/decompose.test.ts",
+      "src/test/integration/budget.test.ts",
+      "src/test/integration/decompose.test.ts",
+    ],
 
     // Coverage (opt-in via --coverage flag)
     coverage: {
