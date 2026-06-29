@@ -29,7 +29,7 @@ export function classifyMessage(content: string): AgentDomain {
     }
   }
   // Tie-break: SCHEDULER wins ties — scheduling tasks are unambiguous even with legal keywords
-  const top = Object.entries(scores).sort(([dA, a], [dB, b]: [string, number][]) => {
+  const top = Object.entries(scores).sort(([dA, a], [dB, b]) => {
     if (b - a !== 0) return b - a;
     if (dA === 'SCHEDULER') return -1;
     if (dB === 'SCHEDULER') return 1;
