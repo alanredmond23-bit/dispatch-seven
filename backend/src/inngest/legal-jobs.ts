@@ -7,6 +7,13 @@
 
 import { inngest } from "../lib/inngest.js";
 
+/** Validate a required env var and throw a clear error rather than crashing with undefined. */
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`[legal-jobs] ${name} is required but not set`);
+  return value;
+}
+
 // ── 1. five9IndexJob ──────────────────────────────────────────────────────────
 // Runs nightly at 02:00 — pulls Five9 WAV blobs from Azure Blob Storage
 // and upserts records into dispatch_ops.legal_evidence.
@@ -18,13 +25,18 @@ export const five9IndexJob = inngest.createFunction(
   { id: "five9-index", name: "Five9 Evidence Indexer" },
   { cron: "0 2 * * *" },
   async ({ step, logger }) => {
+    // Validate env vars at function start — fail fast with a clear message
+    const AZURE_STORAGE_CONNECTION_STRING = requireEnv('AZURE_STORAGE_CONNECTION_STRING');
+    const SUPABASE_URL = requireEnv('SUPABASE_URL');
+    const SUPABASE_SERVICE_KEY = requireEnv('SUPABASE_SERVICE_KEY');
+
     const result = await step.run("index-blobs", async () => {
       // Dynamic import keeps the cold-start bundle small
       const { indexFive9Evidence } = await import("../agents/five9-indexer.js");
       return indexFive9Evidence(
-        process.env.AZURE_STORAGE_CONNECTION_STRING!,
-        process.env.SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_KEY!
+        AZURE_STORAGE_CONNECTION_STRING,
+        SUPABASE_URL,
+        SUPABASE_SERVICE_KEY
       );
     });
 
@@ -50,14 +62,19 @@ export const voyageBackfillJob = inngest.createFunction(
     { event: "legal/backfill.requested" },
   ],
   async ({ step, logger }) => {
+    // Validate env vars at function start — fail fast with a clear message
+    const VOYAGE_API_KEY = requireEnv('VOYAGE_API_KEY');
+    const SUPABASE_URL = requireEnv('SUPABASE_URL');
+    const SUPABASE_SERVICE_KEY = requireEnv('SUPABASE_SERVICE_KEY');
+
     const result = await step.run("embed-documents", async () => {
       const { backfillLegalEmbeddings } = await import(
         "../lib/voyage-legal-backfill.js"
       );
       return backfillLegalEmbeddings(
-        process.env.VOYAGE_API_KEY!,
-        process.env.SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_KEY!
+        VOYAGE_API_KEY,
+        SUPABASE_URL,
+        SUPABASE_SERVICE_KEY
       );
     });
 
