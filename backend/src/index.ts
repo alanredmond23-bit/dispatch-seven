@@ -22,6 +22,7 @@ import { jobRoutes } from "./routes/jobs.js";          // T9: Inngest job queue 
 import { sessionRoutes } from "./routes/sessions.js";  // T10: active session listing
 import { budgetGuard } from "./middleware/budget-guard.js"; // PR32: per-session spend cap
 import { evidenceRoutes } from "./routes/evidence.js"; // Five9 WAV evidence indexer — 5:24-cr-00376
+import { dashboardRoutes } from "./routes/dashboard.js"; // PR14: ops dashboard
 
 // Inngest — client + all registered functions
 import { inngest } from "./lib/inngest.js";
@@ -55,6 +56,7 @@ app.route("/api/v1/jobs", jobRoutes);              // T9: job trigger + status
 app.route("/api/v1/sessions", sessionRoutes);      // T10: session list + message feed
 app.route("/api/evidence", evidenceRoutes);        // Five9 WAV evidence — ingest/search/list — 5:24-cr-00376
 app.route("/api/settings", settingsRouter);        // Settings: CRUD for all D7 operator preferences
+app.route("/dashboard", dashboardRoutes);           // PR14: ops dashboard
 
 // Inngest serve handler — canonical Hono adapter pattern
 // GET: introspection by Inngest Cloud
