@@ -16,6 +16,12 @@
 //   { type: "done",   session_id: string }        — stream complete
 //   { type: "error",  message: string }           — error
 //   { type: "ping" }                              — heartbeat (30s)
+//
+// Turn 12 additions:
+//   - AbortController per streaming call: onClose aborts active Anthropic stream
+//     → no more orphaned HTTP calls burning tokens after the user closes the tab
+//   - Per-session message queue: if a stream is already active when a new message
+//     arrives, it is queued and processed sequentially (no concurrent stream races)
 
 import type { UpgradeWebSocket } from "hono/ws";
 import OpenAI from "openai";
@@ -116,6 +122,7 @@ async function streamAnthropic(
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(body),
+    signal, // Turn 12: kills the TCP connection when signal fires
   });
 
   if (!res.ok) {
@@ -129,6 +136,12 @@ async function streamAnthropic(
   let fullResponse = "";
 
   while (true) {
+    // Turn 12: check abort between chunks
+    if (signal?.aborted) {
+      await reader.cancel();
+      throw new Error("Stream aborted by client disconnect");
+    }
+
     const { done, value } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
@@ -264,196 +277,260 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
           return;
         }
 
-        const sid         = msg.session_id ?? sessionId;
-        const userMessage = msg.content;
+        const sid = msg.session_id ?? sessionId;
+        const state = getSessionState(sid);
 
-        // ── AGENT ROUTING — classify message, load agent config ─────────────
-        const agentFromMsg = msg.agent;
-        const domain       = classifyMessage(userMessage);
-        const agentConfig  = loadAgent(domain);
-        const agentLabel   = agentFromMsg ?? domain;
-        const isLegal      = domain === "LEGAL"; // used for citation block + Langfuse metadata
-
-        console.log(
-          `[WS] message session=${sid} len=${userMessage.length} agent=${agentLabel} provider=${agentConfig.provider}`
-        );
-
-        // ── ROUTE INDICATOR ──────────────────────────────────────────────────
-        ws.send(JSON.stringify({
-          type:     "route",
-          agent:    domain,
-          model:    agentConfig.model,
-          provider: agentConfig.provider,
-        }));
-
-        // ── P0: TASK STATUS — write 'running' ────────────────────────────────
-        const taskId      = `task-${sid}-${Date.now()}`;
-        const taskStarted = new Date().toISOString();
-        writeTaskStatus({
-          task_id:      taskId,
-          session_id:   sid,
-          title:        userMessage.slice(0, 80) + (userMessage.length > 80 ? "…" : ""),
-          status:       "running",
-          progress_pct: 5,
-          agent_name:   agentLabel,
-          cost_usd:     0,
-          started_at:   taskStarted,
-        }).catch(console.error);
-
-        // ── MEM0: fetch relevant context ─────────────────────────────────────
-        let systemPrompt: string | undefined = agentConfig.systemPrompt;
-        try {
-          const memCtx = await getRelevantContext(sid, userMessage);
-          if (memCtx) {
-            systemPrompt = `${agentConfig.systemPrompt}\n\n---\nMemories from prior sessions:\n${memCtx}`;
-          }
-        } catch { /* Mem0 down — proceed without context */ }
-
-        // ── BUDGET CHECK ─────────────────────────────────────────────────────
-        try {
-          await checkBudget(sid);
-        } catch (err: unknown) {
-          if (err instanceof BudgetCapError) {
-            ws.send(JSON.stringify({ type: "error", message: err.message }));
-            ws.close(1008, "budget cap reached");
-            return;
-          }
-          console.error("[budget] unexpected error:", err);
+        // Turn 12: queue if a stream is already active for this session
+        if (state.processing) {
+          state.queue.push({ content: msg.content, agentOverride: msg.agent });
+          ws.send(JSON.stringify({
+            type: "queued",
+            position: state.queue.length,
+            session_id: sid,
+          }));
+          return;
         }
 
-        // ── LANGFUSE TRACE SETUP ─────────────────────────────────────────────
-        const traceId   = `${sid}-${Date.now()}`;
-        const spanStart = new Date().toISOString();
-        let   outputBuf = "";
-
-        // Cost tracking
-        const tracker = trackRun({ session_id: sid, agent: agentLabel, model: agentConfig.model });
-        const runId   = await tracker.start().catch(() => null);
-
-        try {
-          const { fullResponse, ...usage } = await streamWithProvider(
-            agentConfig.providerConfig,
-            userMessage,
-            (token) => {
-              outputBuf += token;
-              ws.send(JSON.stringify({ type: "token", content: token }));
-            },
-            systemPrompt,
-            agentConfig.maxTokens
-          );
-
-          // Legal: extract + verify citations, stream citation block
-          if (isLegal && fullResponse) {
-            const citationBlock = await buildCitationBlock(fullResponse);
-            outputBuf += citationBlock;
-            ws.send(JSON.stringify({ type: "token", content: citationBlock }));
-          }
-
-          // Parse embedded action blocks
-          try {
-            await parseAndInsertActions(fullResponse, sid);
-          } catch (actErr) {
-            console.error("[actions-parser] non-fatal:", actErr);
-          }
-
-          // Orchestrator routing detection
-          try {
-            const routeMatch = fullResponse.match(
-              /\{[^{}]*"agent"\s*:\s*"([A-Z]+)"[^{}]*"task"\s*:\s*"([^"]+)"[^{}]*\}/
-            );
-            if (routeMatch) {
-              const backendBase = `http://localhost:${process.env.PORT ?? "3001"}`;
-              fetch(`${backendBase}/api/v1/actions`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  session_id: sid,
-                  agent:   "ORCHESTRATOR",
-                  type:    "spawn_task",
-                  payload: { target_agent: routeMatch[1], task_title: routeMatch[2] },
-                }),
-              }).catch(() => {/* non-fatal */});
-            }
-          } catch { /* routing detection must not crash WS handler */ }
-
-          ws.send(JSON.stringify({ type: "done", session_id: sid }));
-
-          const spanEnd = new Date().toISOString();
-
-          if (runId) tracker.finish(runId, usage).catch(console.error);
-
-          const { calculateCost } = await import("../lib/cost-tracker.js");
-          const finalCost = calculateCost(agentConfig.model, usage.input_tokens, usage.output_tokens);
-
-          writeTaskStatus({
-            task_id:      taskId,
-            session_id:   sid,
-            title:        userMessage.slice(0, 80) + (userMessage.length > 80 ? "…" : ""),
-            status:       "done",
-            progress_pct: 100,
-            agent_name:   agentLabel,
-            cost_usd:     finalCost,
-            started_at:   taskStarted,
-          }).catch(console.error);
-
-          traceRun({
-            traceId,
-            agentName: agentLabel,
-            input:     userMessage,
-            output:    outputBuf,
-            costUsd:   finalCost,
-            metadata: {
-              session_id:   sid,
-              model:        agentConfig.model,
-              provider:     agentConfig.provider,
-              inputTokens:  usage.input_tokens,
-              outputTokens: usage.output_tokens,
-              spanStart,
-              spanEnd,
-              isLegal,
-            },
-          }).catch(console.error);
-
-          addMemory(sid, [
-            { role: "user",      content: userMessage  },
-            { role: "assistant", content: fullResponse },
-          ]).catch(() => {/* Mem0 down — silent */});
-
-        } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err);
-          console.error(`[WS] stream error session=${sid}:`, message);
-          ws.send(JSON.stringify({ type: "error", message }));
-
-          writeTaskStatus({
-            task_id:      taskId,
-            session_id:   sid,
-            title:        userMessage.slice(0, 80) + (userMessage.length > 80 ? "…" : ""),
-            status:       "failed",
-            progress_pct: 0,
-            agent_name:   agentLabel,
-            cost_usd:     0,
-            started_at:   taskStarted,
-            error:        message,
-          }).catch(console.error);
-        }
+        // Process the message (and then drain the queue)
+        await processMessageAndDrainQueue(sid, msg.content, msg.agent, ws);
       },
 
       onClose(_evt, _ws) {
         console.log(`[WS] close session=${sessionId}`);
         if (pingTimer) clearInterval(pingTimer);
         if (pongTimer) clearTimeout(pongTimer);
+
+        // Turn 12: abort any active stream for this session
+        const state = sessionState.get(sessionId);
+        if (state?.controller) {
+          console.log(`[WS] aborting active stream for session=${sessionId}`);
+          state.controller.abort();
+        }
+        // Clear session state on close — WS is gone, queued messages are irrelevant
+        sessionState.delete(sessionId);
       },
 
       onError(evt, _ws) {
         console.error(`[WS] error session=${sessionId}`, evt);
         if (pingTimer) clearInterval(pingTimer);
         if (pongTimer) clearTimeout(pongTimer);
+        // Also abort on error
+        const state = sessionState.get(sessionId);
+        if (state?.controller) state.controller.abort();
+        sessionState.delete(sessionId);
       },
     };
   });
 }
 
+// ── CORE PROCESSING ───────────────────────────────────────────────────────────
+// Extracted from onMessage for queue draining. Processes one message then
+// recursively picks up queued messages until queue is empty.
+
+async function processMessageAndDrainQueue(
+  sid: string,
+  userMessage: string,
+  agentFromMsg: string | undefined,
+  ws: { send: (data: string) => void; close: (code?: number, reason?: string) => void }
+): Promise<void> {
+  const state = getSessionState(sid);
+  state.processing = true;
+
+  // Turn 12: create an AbortController for this stream
+  const controller = new AbortController();
+  state.controller = controller;
+
+  const domain = classifyMessage(userMessage);
+  const agentConfig = await loadAgent(domain);
+  const agentLabel = agentFromMsg ?? domain;
+  console.log(`[WS] message session=${sid} len=${userMessage.length} agent=${agentLabel}`);
+
+  ws.send(JSON.stringify({ type: "route", agent: domain, model: agentConfig.model, provider: agentConfig.provider }));
+
+  const taskId      = `task-${sid}-${Date.now()}`;
+  const taskStarted = new Date().toISOString();
+  writeTaskStatus({
+    task_id:      taskId,
+    session_id:   sid,
+    title:        userMessage.slice(0, 80) + (userMessage.length > 80 ? "…" : ""),
+    status:       "running",
+    progress_pct: 5,
+    agent_name:   agentLabel,
+    cost_usd:     0,
+    started_at:   taskStarted,
+  }).catch(console.error);
+
+  let systemPrompt: string | undefined = agentConfig.systemPrompt;
+  try {
+    const memCtx = await getRelevantContext(sid, userMessage);
+    if (memCtx) {
+      systemPrompt = `${agentConfig.systemPrompt}\n\n---\nMemories from prior sessions:\n${memCtx}`;
+    }
+  } catch {
+    // Mem0 down — proceed without context
+  }
+
+  try {
+    await checkBudget(sid);
+  } catch (err: unknown) {
+    if (err instanceof BudgetCapError) {
+      ws.send(JSON.stringify({ type: "error", message: err.message }));
+      ws.close(1008, "budget cap reached");
+      state.processing = false;
+      state.controller = null;
+      return;
+    }
+    console.error("[budget] unexpected error:", err);
+  }
+
+  const traceId   = `${sid}-${Date.now()}`;
+  const spanStart = new Date().toISOString();
+  let   outputBuf = "";
+
+  const tracker = trackRun({ session_id: sid, agent: agentLabel, model: agentConfig.model });
+  const runId   = await tracker.start().catch(() => null);
+
+  try {
+    const { fullResponse, ...usage } = await streamWithProvider(
+      agentConfig.providerConfig,
+      userMessage,
+      (token) => {
+        outputBuf += token;
+        ws.send(JSON.stringify({ type: "token", content: token }));
+      },
+      systemPrompt,
+      agentConfig.maxTokens
+    );
+
+    if (domain === "LEGAL" && fullResponse) {
+      const citationBlock = await buildCitationBlock(fullResponse);
+      outputBuf += citationBlock;
+      ws.send(JSON.stringify({ type: "token", content: citationBlock }));
+    }
+
+    try {
+      await parseAndInsertActions(fullResponse, sid);
+    } catch (actErr) {
+      console.error("[actions-parser] non-fatal:", actErr);
+    }
+    if (domain === "SCHEDULER" && fullResponse) {
+      try {
+        const schedParsed = parseSchedulerOutput(fullResponse);
+        if (schedParsed && schedParsed.tasks.length > 0) {
+          await upsertScheduledTasks(schedParsed, sid);
+        }
+      } catch (schedErr) {
+        console.error("[scheduler-runner] non-fatal:", schedErr);
+      }
+    }
+
+    try {
+      const routeMatch = fullResponse.match(
+        /\{[^{}]*"agent"\s*:\s*"([A-Z]+)"[^{}]*"task"\s*:\s*"([^"]+)"[^{}]*\}/
+      );
+      if (routeMatch) {
+        const backendBase = `http://localhost:${process.env.PORT ?? "3001"}`;
+        fetch(`${backendBase}/api/v1/actions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: sid,
+            agent: "ORCHESTRATOR",
+            type:  "spawn_task",
+            payload: { target_agent: routeMatch[1], task_title: routeMatch[2] },
+          }),
+        }).catch(() => {/* non-fatal */});
+      }
+    } catch {
+      // non-fatal
+    }
+
+    ws.send(JSON.stringify({ type: "done", session_id: sid }));
+
+    const spanEnd = new Date().toISOString();
+    if (runId) tracker.finish(runId, usage).catch(console.error);
+
+    const { calculateCost: calcCostDone } = await import("../lib/cost-tracker.js");
+    const finalCost = calcCostDone("claude-sonnet-4-6", usage.input_tokens, usage.output_tokens);
+    writeTaskStatus({
+      task_id:      taskId,
+      session_id:   sid,
+      title:        userMessage.slice(0, 80) + (userMessage.length > 80 ? "…" : ""),
+      status:       "done",
+      progress_pct: 100,
+      agent_name:   agentLabel,
+      cost_usd:     finalCost,
+      started_at:   taskStarted,
+    }).catch(console.error);
+
+    const { calculateCost } = await import("../lib/cost-tracker.js");
+    const costUsd = calculateCost(agentConfig.model, usage.input_tokens, usage.output_tokens);
+
+    traceRun({
+      traceId,
+      agentName: agentLabel,
+      input:     userMessage,
+      output:    outputBuf,
+      costUsd,
+      metadata: {
+        session_id:   sid,
+        model:        agentConfig.model,
+        inputTokens:  usage.input_tokens,
+        outputTokens: usage.output_tokens,
+        spanStart,
+        spanEnd,
+        isLegal:      domain === "LEGAL",
+      },
+    }).catch(console.error);
+
+    addMemory(sid, [
+      { role: "user",      content: userMessage  },
+      { role: "assistant", content: fullResponse },
+    ]).catch(() => {/* Mem0 down — silent */});
+
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    // Turn 12: "Stream aborted by client disconnect" is expected — don't spam error to a closed socket
+    const isAbort = message.includes("aborted") || message.includes("abort");
+    if (!isAbort) {
+      console.error(`[WS] stream error session=${sid}:`, message);
+      try {
+        ws.send(JSON.stringify({ type: "error", message }));
+      } catch {/* ws may be closed */}
+    } else {
+      console.log(`[WS] stream cleanly aborted for session=${sid} — client disconnected`);
+    }
+
+    writeTaskStatus({
+      task_id:      taskId,
+      session_id:   sid,
+      title:        userMessage.slice(0, 80) + (userMessage.length > 80 ? "…" : ""),
+      status:       "failed",
+      progress_pct: 0,
+      agent_name:   agentLabel,
+      cost_usd:     0,
+      started_at:   taskStarted,
+      error:        message,
+    }).catch(console.error);
+  } finally {
+    // Turn 12: clear stream state
+    state.processing = false;
+    state.controller = null;
+
+    // Turn 12: drain the queue — process next message if one is waiting
+    if (state.queue.length > 0) {
+      const next = state.queue.shift()!;
+      // Fire-and-forget — next message processes asynchronously
+      processMessageAndDrainQueue(sid, next.content, next.agentOverride, ws).catch(
+        (err) => console.error("[WS] queue drain error:", err)
+      );
+    }
+  }
+}
+
 // ── P0: TASK STATUS WRITER ────────────────────────────────────────────────────
+
 export interface TaskStatusPayload {
   task_id:      string;
   session_id:   string;
