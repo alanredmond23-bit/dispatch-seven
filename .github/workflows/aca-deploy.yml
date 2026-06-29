@@ -1,12 +1,16 @@
 name: Deploy to ACA
+
 on:
   push:
     branches: [main]
-    paths: ['backend/**', '.github/workflows/aca-deploy.yml']
+    paths:
+      - 'backend/**'
+      - '.github/workflows/aca-deploy.yml'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
