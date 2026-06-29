@@ -1,16 +1,12 @@
 name: Deploy to ACA
-
 on:
   push:
     branches: [main]
-    paths:
-      - 'backend/**'
-      - '.github/workflows/aca-deploy.yml'
+    paths: ['backend/**', '.github/workflows/aca-deploy.yml']
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -26,16 +22,60 @@ jobs:
             --image dispatch-seven-api:${{ github.sha }} \
             ./backend
 
-      - name: Configure ACR pull auth on ACA
+      # Enable system-assigned managed identity if not present, then grant AcrPull (idempotent)
+      - name: Ensure ACA managed identity has AcrPull on ACR
         run: |
-          az acr update --name ${{ secrets.ACR_NAME }} --admin-enabled true
-          ACR_PASSWORD=$(az acr credential show --name ${{ secrets.ACR_NAME }} --query passwords[0].value -o tsv)
-          az containerapp registry set \
+          # Enable system-assigned identity if not already enabled
+          ACA_IDENTITY_TYPE=$(az containerapp show \
             --name dispatch-seven-api \
             --resource-group menagerie-rg \
-            --server ${{ secrets.ACR_NAME }}.azurecr.io \
-            --username ${{ secrets.ACR_NAME }} \
-            --password "$ACR_PASSWORD"
+            --query "identity.type" -o tsv)
+
+          if [ "$ACA_IDENTITY_TYPE" = "None" ] || [ -z "$ACA_IDENTITY_TYPE" ]; then
+            echo "Enabling system-assigned managed identity on ACA..."
+            az containerapp identity assign \
+              --name dispatch-seven-api \
+              --resource-group menagerie-rg \
+              --system-assigned \
+              --output none
+            # Wait for AAD propagation
+            sleep 20
+          else
+            echo "Identity type: $ACA_IDENTITY_TYPE — skipping enable step"
+          fi
+
+          ACA_PRINCIPAL_ID=$(az containerapp show \
+            --name dispatch-seven-api \
+            --resource-group menagerie-rg \
+            --query "identity.principalId" -o tsv)
+
+          echo "ACA Principal ID: $ACA_PRINCIPAL_ID"
+
+          ACR_RESOURCE_ID=$(az acr show \
+            --name ${{ secrets.ACR_NAME }} \
+            --resource-group menagerie-rg \
+            --query "id" -o tsv)
+
+          # Check using object-id to bypass Graph API permission requirement
+          EXISTING=$(az role assignment list \
+            --assignee-object-id "$ACA_PRINCIPAL_ID" \
+            --role "AcrPull" \
+            --scope "$ACR_RESOURCE_ID" \
+            --query "length(@)" -o tsv 2>/dev/null || echo "0")
+
+          if [ "$EXISTING" = "0" ]; then
+            echo "Creating AcrPull role assignment..."
+            az role assignment create \
+              --assignee-object-id "$ACA_PRINCIPAL_ID" \
+              --assignee-principal-type ServicePrincipal \
+              --role "AcrPull" \
+              --scope "$ACR_RESOURCE_ID" \
+              --output none \
+              || echo "Warning: role assignment create returned non-zero — may already exist, continuing"
+            echo "AcrPull configured for ACA managed identity"
+          else
+            echo "AcrPull role already assigned — skipping"
+          fi
 
       - name: Deploy to ACA with env vars
         run: |
@@ -43,13 +83,18 @@ jobs:
             --name dispatch-seven-api \
             --resource-group menagerie-rg \
             --image ${{ secrets.ACR_NAME }}.azurecr.io/dispatch-seven-api:${{ github.sha }} \
+            --registry-server ${{ secrets.ACR_NAME }}.azurecr.io \
+            --registry-identity system \
             --set-env-vars \
               "PORT=3000" \
               "NODE_ENV=production" \
               "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" \
+              "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" \
               "BUDGET_CAP_USD=5.00" \
               "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" \
               "SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+              "SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}" \
+              "API_BEARER_TOKEN=${{ secrets.API_BEARER_TOKEN }}" \
               "VOYAGE_API_KEY=${{ secrets.VOYAGE_API_KEY }}" \
               "LANGFUSE_PUBLIC_KEY=${{ secrets.LANGFUSE_PUBLIC_KEY }}" \
               "LANGFUSE_SECRET_KEY=${{ secrets.LANGFUSE_SECRET_KEY }}" \

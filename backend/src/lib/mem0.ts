@@ -12,6 +12,9 @@ import { embedText } from "./voyage.js";
 
 const TIMEOUT_MS = 2000;
 
+// Mem0 SDK v3 Message type: role must be "user" | "assistant"
+type Mem0Message = { role: "user" | "assistant"; content: string };
+
 function withTimeout<T>(p: Promise<T>): Promise<T> {
   return Promise.race([
     p,
@@ -29,20 +32,25 @@ function getClient(): MemoryClient | null {
 
 export async function addMemory(
   userId: string,
-  messages: { role: string; content: string }[],
+  messages: Mem0Message[],
   agentId = "dispatch7"
 ): Promise<void> {
-  // Fire-and-forget: Mem0 store — cast to Promise<void> to access .catch()
+  // Runtime guard: messages must be a non-empty array
+  if (!Array.isArray(messages)) {
+    throw new Error('[mem0] addMemory: messages must be an array of {role, content} objects');
+  }
+
+  // Fire-and-forget: Mem0 store
+  // SDK v3 options use camelCase: userId, agentId (not user_id, agent_id)
   (withTimeout(
     (async () => {
       const client = getClient();
       if (!client) return;
-      await client.add(messages as any, { userId, agentId });
+      await client.add(messages, { userId, agentId });
     })()
   ) as Promise<void>).catch(() => {/* Mem0 down — silent */});
 
   // Sync assistant turn to Supabase dispatch7.memory with Voyage embedding.
-  // Embedding is generated async and degraded gracefully if Voyage is unavailable.
   const assistantMsg = messages.find((m) => m.role === "assistant");
   if (assistantMsg) {
     const snippet = assistantMsg.content.slice(0, 500);
@@ -55,7 +63,6 @@ export async function addMemory(
       // VOYAGE_API_KEY not set or API unreachable — store row without vector
     }
 
-    // Use Promise.resolve() to coerce PromiseLike to Promise (Supabase builder quirk)
     void Promise.resolve(
       supabase
         .schema("dispatch7")
@@ -78,12 +85,12 @@ export async function searchMemory(
   try {
     const client = getClient();
     if (!client) return [];
-    const results = await withTimeout(
-      client.search(query, { userId, limit } as any)
+    // SDK v3 search() returns { results: Memory[] } — Memory has optional .memory string
+    const response = await withTimeout(
+      client.search(query, { filters: { user_id: userId }, topK: limit })
     );
-    // mem0ai returns array of {memory: string, ...}
-    return ((results as any) as Array<{ memory: string }>)
-      .map((r) => r.memory)
+    return response.results
+      .map((r) => r.memory ?? '')
       .filter(Boolean);
   } catch {
     return [];
