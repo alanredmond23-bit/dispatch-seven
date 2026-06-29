@@ -26,10 +26,11 @@ import { traceRun } from "../lib/langfuse.js";
 import { supabase } from "../lib/supabase.js";
 import { extractCitations, verifyCitation } from "../lib/citation-extractor.js";
 import { parseAndInsertActions } from "../middleware/actions-parser.js";
-import { parseSchedulerOutput, upsertScheduledTasks } from "../lib/scheduler-runner.js";
 import { classifyMessage } from "../lib/classifier.js";
 import { loadAgent } from "../lib/agent-loader.js";
 import { budgetOverrides } from "../lib/session-store.js";
+import { markSessionRead } from "../lib/notify.js";
+import { parseSchedulerOutput, upsertScheduledTasks } from "../lib/scheduler-runner.js";
 
 const ANTHROPIC_URL    = "https://api.anthropic.com/v1/messages";
 const PING_INTERVAL_MS = 30_000;
@@ -301,6 +302,9 @@ export function buildWsHandler(upgradeWebSocket: UpgradeWebSocket) {
 
         const sid = msg.session_id ?? sessionId;
         const state = getSessionState(sid);
+
+        // Auto-clear unread notifications for this session when user sends a message
+        markSessionRead(sid).catch(console.error);
 
         // Turn 12: queue if a stream is already active for this session
         if (state.processing) {
