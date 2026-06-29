@@ -1,12 +1,16 @@
 name: Deploy to ACA
+
 on:
   push:
     branches: [main]
-    paths: ['backend/**', '.github/workflows/aca-deploy.yml']
+    paths:
+      - 'backend/**'
+      - '.github/workflows/aca-deploy.yml'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -22,35 +26,16 @@ jobs:
             --image dispatch-seven-api:${{ github.sha }} \
             ./backend
 
-      # Assign AcrPull to the ACA system-assigned managed identity (idempotent)
-      # Replaces admin credential pattern — no --admin-enabled required
-      - name: Grant ACA managed identity AcrPull on ACR
+      - name: Configure ACR pull auth on ACA
         run: |
-          ACA_PRINCIPAL_ID=$(az containerapp show \
+          az acr update --name ${{ secrets.ACR_NAME }} --admin-enabled true
+          ACR_PASSWORD=$(az acr credential show --name ${{ secrets.ACR_NAME }} --query passwords[0].value -o tsv)
+          az containerapp registry set \
             --name dispatch-seven-api \
             --resource-group menagerie-rg \
-            --query "identity.principalId" -o tsv)
-
-          ACR_RESOURCE_ID=$(az acr show \
-            --name ${{ secrets.ACR_NAME }} \
-            --query "id" -o tsv)
-
-          # Idempotent: only create if not already assigned
-          EXISTING=$(az role assignment list \
-            --assignee "$ACA_PRINCIPAL_ID" \
-            --role "AcrPull" \
-            --scope "$ACR_RESOURCE_ID" \
-            --query "length(@)" -o tsv)
-
-          if [ "$EXISTING" = "0" ]; then
-            az role assignment create \
-              --assignee "$ACA_PRINCIPAL_ID" \
-              --role "AcrPull" \
-              --scope "$ACR_RESOURCE_ID"
-            echo "AcrPull role assigned to ACA managed identity"
-          else
-            echo "AcrPull role already assigned — skipping"
-          fi
+            --server ${{ secrets.ACR_NAME }}.azurecr.io \
+            --username ${{ secrets.ACR_NAME }} \
+            --password "$ACR_PASSWORD"
 
       - name: Deploy to ACA with env vars
         run: |
@@ -58,8 +43,6 @@ jobs:
             --name dispatch-seven-api \
             --resource-group menagerie-rg \
             --image ${{ secrets.ACR_NAME }}.azurecr.io/dispatch-seven-api:${{ github.sha }} \
-            --registry-server ${{ secrets.ACR_NAME }}.azurecr.io \
-            --registry-identity system \
             --set-env-vars \
               "PORT=3000" \
               "NODE_ENV=production" \
