@@ -22,32 +22,57 @@ jobs:
             --image dispatch-seven-api:${{ github.sha }} \
             ./backend
 
-      # Assign AcrPull to the ACA system-assigned managed identity (idempotent)
-      # Replaces admin credential pattern — no --admin-enabled required
-      - name: Grant ACA managed identity AcrPull on ACR
+      # Enable system-assigned managed identity if not present, then grant AcrPull (idempotent)
+      - name: Ensure ACA managed identity has AcrPull on ACR
         run: |
+          # Enable system-assigned identity if not already enabled
+          ACA_IDENTITY_TYPE=$(az containerapp show \
+            --name dispatch-seven-api \
+            --resource-group menagerie-rg \
+            --query "identity.type" -o tsv)
+
+          if [ "$ACA_IDENTITY_TYPE" = "None" ] || [ -z "$ACA_IDENTITY_TYPE" ]; then
+            echo "Enabling system-assigned managed identity on ACA..."
+            az containerapp identity assign \
+              --name dispatch-seven-api \
+              --resource-group menagerie-rg \
+              --system-assigned \
+              --output none
+            # Wait for AAD propagation
+            sleep 20
+          else
+            echo "Identity type: $ACA_IDENTITY_TYPE — skipping enable step"
+          fi
+
           ACA_PRINCIPAL_ID=$(az containerapp show \
             --name dispatch-seven-api \
             --resource-group menagerie-rg \
             --query "identity.principalId" -o tsv)
 
+          echo "ACA Principal ID: $ACA_PRINCIPAL_ID"
+
           ACR_RESOURCE_ID=$(az acr show \
             --name ${{ secrets.ACR_NAME }} \
+            --resource-group menagerie-rg \
             --query "id" -o tsv)
 
-          # Idempotent: only create if not already assigned
+          # Check using object-id to bypass Graph API permission requirement
           EXISTING=$(az role assignment list \
-            --assignee "$ACA_PRINCIPAL_ID" \
+            --assignee-object-id "$ACA_PRINCIPAL_ID" \
             --role "AcrPull" \
             --scope "$ACR_RESOURCE_ID" \
-            --query "length(@)" -o tsv)
+            --query "length(@)" -o tsv 2>/dev/null || echo "0")
 
           if [ "$EXISTING" = "0" ]; then
+            echo "Creating AcrPull role assignment..."
             az role assignment create \
-              --assignee "$ACA_PRINCIPAL_ID" \
+              --assignee-object-id "$ACA_PRINCIPAL_ID" \
+              --assignee-principal-type ServicePrincipal \
               --role "AcrPull" \
-              --scope "$ACR_RESOURCE_ID"
-            echo "AcrPull role assigned to ACA managed identity"
+              --scope "$ACR_RESOURCE_ID" \
+              --output none \
+              || echo "Warning: role assignment create returned non-zero — may already exist, continuing"
+            echo "AcrPull configured for ACA managed identity"
           else
             echo "AcrPull role already assigned — skipping"
           fi
@@ -64,9 +89,12 @@ jobs:
               "PORT=3000" \
               "NODE_ENV=production" \
               "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" \
+              "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" \
               "BUDGET_CAP_USD=5.00" \
               "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" \
               "SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+              "SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}" \
+              "API_BEARER_TOKEN=${{ secrets.API_BEARER_TOKEN }}" \
               "VOYAGE_API_KEY=${{ secrets.VOYAGE_API_KEY }}" \
               "LANGFUSE_PUBLIC_KEY=${{ secrets.LANGFUSE_PUBLIC_KEY }}" \
               "LANGFUSE_SECRET_KEY=${{ secrets.LANGFUSE_SECRET_KEY }}" \
